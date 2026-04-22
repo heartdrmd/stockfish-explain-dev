@@ -8655,54 +8655,168 @@ async function main() {
       return tree;
     }
 
-    // Flatten the tree into printable rows with ASCII tree connectors.
+    // Render the variation memory as a chess-book-style ECO table:
+    //   - Shared opening (common move prefix across all lines) at top
+    //   - Numbered variation columns
+    //   - Rows keyed by full-move number, two rows per move (white/black)
+    //   - Click any cell → load that position on the board
     function renderTree() {
       if (!_currentEntries.length) {
         treeEl.innerHTML = '<div class="vr-empty">No variations recorded yet. Enable variation mode and practice a few games.</div>';
         statsEl.textContent = '';
         return;
       }
-      const rows = [];
-      function emit(node, prefix, isLast) {
-        const connector = prefix === '' ? '' : (isLast ? '└─ ' : '├─ ');
-        const ply = plyNumberFromFen(node.fenBefore);
-        const full = Math.ceil(ply / 2);
-        const moveNum = (ply % 2 === 1) ? `${full}.` : `${full}…`;
-        const cached = fenEvalCache.get(node.fenAfter || node.fenBefore) || {};
-        const evalStr = node.isLeaf ? fmtEval(cached.cpWhite, cached.mate) : '';
-        const indent = prefix + connector;
-        const timesCell = node.isLeaf ? `${node.times}×` : '';
-        const dateCell  = node.isLeaf ? fmtRelDate(node.last_played) : '';
-        const legacyTag = node._legacy
-          ? ` <span class="muted" style="font-size:10px;">(no prefix · legacy)</span>`
-          : '';
-        rows.push(`<div class="vr-node" data-fen="${escHtml(node.fenBefore)}" data-uci="${escHtml(node.uci)}" data-next-fen="${escHtml(node.fenAfter || '')}">
-          <span class="vr-moves">${escHtml(indent)}${moveNum} <b>${escHtml(node.san)}</b>${legacyTag}</span>
-          <span class="vr-count">${timesCell}</span>
-          <span class="vr-eval" data-eval-fen="${escHtml(node.fenAfter || node.fenBefore)}">${evalStr}</span>
-          <span class="vr-date">${dateCell}</span>
-        </div>`);
-        const n = node.children.length;
-        node.children.forEach((child, i) => {
-          const childPrefix = prefix + (prefix === '' ? '   ' : (isLast ? '    ' : '│   '));
-          emit(child, childPrefix, i === n - 1);
-        });
-      }
-      for (let i = 0; i < _currentTree.length; i++) {
-        emit(_currentTree[i], '', i === _currentTree.length - 1);
-      }
-      treeEl.innerHTML = rows.join('');
 
-      // Click a row → load the AFTER-move position on the board.
-      treeEl.querySelectorAll('.vr-node').forEach(el => {
+      // Build lines = [{ ucis, times, last_played }] from entries with
+      // prefix_moves. Legacy entries (no prefix_moves) go into a flat
+      // fallback section at the bottom.
+      const lines = [];
+      const legacy = [];
+      for (const e of _currentEntries) {
+        if (e.prefix_moves != null && e.prefix_moves !== undefined) {
+          const prefUcis = e.prefix_moves ? e.prefix_moves.split(/\s+/).filter(Boolean) : [];
+          lines.push({
+            ucis: [...prefUcis, e.uci],
+            times: e.times_played || 1,
+            last_played: e.last_played,
+          });
+        } else {
+          legacy.push(e);
+        }
+      }
+
+      if (!lines.length) {
+        // Pure legacy — show flat list only.
+        treeEl.innerHTML = legacyHtml(legacy);
+      } else {
+        // Find longest common prefix (same UCI at every line).
+        const minLen = Math.min(...lines.map(l => l.ucis.length));
+        let common = 0;
+        outer: for (let i = 0; i < minLen; i++) {
+          const first = lines[0].ucis[i];
+          for (const l of lines) if (l.ucis[i] !== first) break outer;
+          common++;
+        }
+        // If only one line, the "common prefix" equals the whole line;
+        // back off by one so we still show the final move in the table.
+        if (lines.length === 1 && common === lines[0].ucis.length) {
+          common = Math.max(0, common - 1);
+        }
+
+        const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+        // Walk common prefix to collect its SANs + divergence FEN.
+        let fen = START_FEN;
+        const commonSans = [];
+        for (let i = 0; i < common; i++) {
+          const u = lines[0].ucis[i];
+          commonSans.push(uciToSan(fen, u));
+          fen = applyMove(fen, u);
+        }
+        const divergenceFen = fen;
+        const divergencePly = common;  // halfmoves played so far
+
+        // For each line, compute SANs + fensAfter from divergence onward.
+        for (const l of lines) {
+          let lf = divergenceFen;
+          l.sans = []; l.fensAfter = [];
+          for (let i = common; i < l.ucis.length; i++) {
+            const u = l.ucis[i];
+            l.sans.push(uciToSan(lf, u));
+            lf = applyMove(lf, u);
+            l.fensAfter.push(lf);
+          }
+          l.finalFen = lf;
+        }
+
+        // Sort by times desc, then last_played desc.
+        lines.sort((a, b) => (b.times - a.times) || ((b.last_played || '').localeCompare(a.last_played || '')));
+
+        const maxTail = Math.max(...lines.map(l => l.sans.length));
+
+        // Header: opening title + shared prefix moves in SAN.
+        const opMeta = _openingsList.find(o => o.opening_name === _currentOpening);
+        const ecoStr = opMeta?.opening_eco || '';
+        const titleStr = _currentOpening || 'Variations';
+        const prefixStr = commonSans.map((s, i) => {
+          const full = Math.floor(i / 2) + 1;
+          return (i % 2 === 0) ? `${full}.${s}` : s;
+        }).join(' ');
+
+        // Build the table body. Two HTML rows per full-move number —
+        // first white, second black. The move-number <th> spans both
+        // via rowspan=2. First row anchors from the divergence ply.
+        const bodyRows = [];
+        let i = 0;  // halfmove offset from divergence
+        let absPly = divergencePly;
+        while (i < maxTail) {
+          const fullMoveNum = Math.floor(absPly / 2) + 1;
+          const whiteCells = [];
+          const blackCells = [];
+          // Figure out if absPly is a white ply (even) or black (odd).
+          const whiteIdx = (absPly % 2 === 0) ? i : i + 1;
+          const blackIdx = (absPly % 2 === 0) ? i + 1 : i;
+          // If divergence is at black's move, white cell is empty for
+          // the first row of that move number.
+          for (const l of lines) {
+            const wSan = (absPly % 2 === 0 && i < l.sans.length) ? l.sans[i] : '';
+            const wFen = (absPly % 2 === 0 && i < l.fensAfter.length) ? l.fensAfter[i] : '';
+            whiteCells.push({ san: wSan, fen: wFen });
+            const bOffset = (absPly % 2 === 0) ? i + 1 : i;
+            const bSan = (bOffset < l.sans.length) ? l.sans[bOffset] : '';
+            const bFen = (bOffset < l.fensAfter.length) ? l.fensAfter[bOffset] : '';
+            blackCells.push({ san: bSan, fen: bFen });
+          }
+          const cellHtml = (c) => c.fen
+            ? `<td class="vr-eco-cell" data-fen="${escHtml(c.fen)}">${escHtml(c.san)}</td>`
+            : `<td class="vr-eco-cell vr-eco-empty">${escHtml(c.san)}</td>`;
+          bodyRows.push(`<tr class="vr-eco-white">
+            <th class="vr-eco-rowlabel" rowspan="2">${fullMoveNum}</th>
+            ${whiteCells.map(cellHtml).join('')}
+          </tr>`);
+          bodyRows.push(`<tr class="vr-eco-black">
+            ${blackCells.map(cellHtml).join('')}
+          </tr>`);
+          // Advance: if we started on white, advance 2; if started on
+          // black (first iteration only), advance 1 to align next row
+          // on white.
+          if (absPly % 2 === 0) { i += 2; absPly += 2; }
+          else                  { i += 1; absPly += 1; }
+        }
+
+        // Column header metadata: variation number + times + date.
+        const colHeaders = lines.map((l, idx) =>
+          `<th class="vr-eco-col-num">${idx + 1}</th>`
+        ).join('');
+        const colMeta = lines.map(l =>
+          `<th class="vr-eco-col-meta">${l.times}× · ${fmtRelDate(l.last_played)}</th>`
+        ).join('');
+
+        treeEl.innerHTML = `
+          <div class="vr-eco-title">
+            <div class="vr-eco-name">${escHtml(titleStr.toUpperCase())}${ecoStr ? ` <span class="vr-eco-code">${escHtml(ecoStr)}</span>` : ''}</div>
+            ${prefixStr ? `<div class="vr-eco-opening">${escHtml(prefixStr)}</div>` : ''}
+          </div>
+          <table class="vr-eco-table">
+            <thead>
+              <tr><th></th>${colHeaders}</tr>
+              <tr><th></th>${colMeta}</tr>
+            </thead>
+            <tbody>${bodyRows.join('')}</tbody>
+          </table>
+          ${legacy.length ? `<div class="vr-eco-legacy"><h4>Legacy entries (no prefix recorded)</h4>${legacyHtml(legacy)}</div>` : ''}
+        `;
+      }
+
+      // Click any cell with a FEN → load that position on the board.
+      treeEl.querySelectorAll('[data-fen]').forEach(el => {
         el.addEventListener('click', () => {
-          const nextFen = el.dataset.nextFen;
-          if (!nextFen) return;
+          const fen = el.dataset.fen;
+          if (!fen) return;
           try {
-            board.chess.load(nextFen);
-            board.startingFen = nextFen;
-            board.tree = new (board.tree.constructor)(nextFen);
-            board.cg.set({ fen: nextFen, turnColor: board.chess.turn() === 'w' ? 'white' : 'black' });
+            board.chess.load(fen);
+            board.startingFen = fen;
+            board.tree = new (board.tree.constructor)(fen);
+            board.cg.set({ fen, turnColor: board.chess.turn() === 'w' ? 'white' : 'black' });
             board.dispatchEvent(new CustomEvent('new-game'));
             close();
           } catch (err) {
@@ -8715,6 +8829,25 @@ async function main() {
       const opMeta = _openingsList.find(o => o.opening_name === _currentOpening);
       const ecoStr = opMeta?.opening_eco ? ` · ${opMeta.opening_eco}` : '';
       statsEl.innerHTML = `<strong>${escHtml(_currentOpening)}</strong>${escHtml(ecoStr)} · ${_currentEntries.length} distinct line${_currentEntries.length === 1 ? '' : 's'} · ${totalPlays} total deviations`;
+    }
+
+    // Legacy rendering for entries without prefix_moves — simple flat list.
+    function legacyHtml(legacyEntries) {
+      if (!legacyEntries.length) return '';
+      return `<div class="vr-legacy-list">${legacyEntries.map(e => {
+        const san = uciToSan(e.fen, e.uci);
+        const ply = plyNumberFromFen(e.fen);
+        const full = Math.ceil(ply / 2);
+        const moveNum = (ply % 2 === 1) ? `${full}.` : `${full}…`;
+        const nextFen = applyMove(e.fen, e.uci);
+        const cached = fenEvalCache.get(nextFen || e.fen) || {};
+        return `<div class="vr-legacy-row" data-fen="${escHtml(nextFen || '')}">
+          <span>${moveNum} <b>${escHtml(san)}</b> <span class="muted" style="font-size:10px;">(legacy)</span></span>
+          <span class="vr-count">${e.times_played || 1}×</span>
+          <span class="vr-eval">${fmtEval(cached.cpWhite, cached.mate)}</span>
+          <span class="vr-date">${fmtRelDate(e.last_played)}</span>
+        </div>`;
+      }).join('')}</div>`;
     }
 
     async function probeEvalsInBackground() {

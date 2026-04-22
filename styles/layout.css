@@ -9,6 +9,15 @@
   border-bottom: 1px solid var(--c-border);
   min-height: 60px;
   flex-wrap: wrap;
+  /* Always visible while scrolling — primary nav must stay at hand.
+     position:sticky + top:0 keeps the header pinned at the top of
+     the viewport without taking the element out of flow. High
+     z-index so it sits above any modal backdrops we don't explicitly
+     elevate. */
+  position: sticky;
+  top: 0;
+  z-index: 200;
+  backdrop-filter: blur(6px);
 }
 
 .site-title {

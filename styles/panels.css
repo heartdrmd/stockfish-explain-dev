@@ -3480,6 +3480,103 @@ body.practice-mode.practice-thinking .ceval::after {
 .vr-node .vr-date  { min-width: 70px; text-align: right; }
 .vr-empty { padding: 30px 20px; text-align: center; color: var(--c-font-dimmer); }
 
+/* ECO-book style: shared opening + numbered-column table of variations */
+.vr-eco-title {
+  text-align: center;
+  margin: 10px 0 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.12);
+}
+.vr-eco-title .vr-eco-name {
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  font-size: 18px;
+  margin-bottom: 4px;
+}
+.vr-eco-title .vr-eco-code {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--c-font-dimmer, rgba(255,255,255,0.5));
+  font-weight: 600;
+  margin-left: 6px;
+}
+.vr-eco-title .vr-eco-opening {
+  font-weight: 600;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.vr-eco-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-san);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.vr-eco-table th,
+.vr-eco-table td {
+  padding: 4px 8px;
+  text-align: center;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.vr-eco-table thead th {
+  background: rgba(255,255,255,0.05);
+  font-weight: 700;
+  color: var(--c-font, #e6e6e6);
+}
+.vr-eco-table thead th.vr-eco-col-meta {
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--c-font-dimmer, rgba(255,255,255,0.5));
+  background: rgba(255,255,255,0.02);
+}
+.vr-eco-rowlabel {
+  width: 40px;
+  font-weight: 700;
+  color: var(--c-font-dimmer, rgba(255,255,255,0.6));
+  background: rgba(255,255,255,0.03);
+}
+.vr-eco-cell {
+  cursor: pointer;
+  transition: background 0.06s;
+}
+.vr-eco-cell:hover {
+  background: var(--c-primary, #3692e7);
+  color: #fff;
+}
+.vr-eco-cell.vr-eco-empty {
+  cursor: default;
+  color: var(--c-font-dimmer, rgba(255,255,255,0.3));
+}
+.vr-eco-cell.vr-eco-empty:hover {
+  background: none;
+}
+.vr-eco-white { border-bottom: none; }
+.vr-eco-black td { border-top: none; }
+
+/* Legacy entries section at the bottom */
+.vr-eco-legacy {
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255,255,255,0.1);
+}
+.vr-eco-legacy h4 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-font-dimmer, rgba(255,255,255,0.5));
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.vr-legacy-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 10px;
+  padding: 5px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.vr-legacy-row:hover { background: rgba(255,255,255,0.05); }
+
 /* Print / Save-as-PDF — show only the report modal on white paper */
 @media print {
   body > * { visibility: hidden !important; }
