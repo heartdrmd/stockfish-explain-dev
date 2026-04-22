@@ -8442,9 +8442,22 @@ async function main() {
   // Reads from opening-variation.js's Postgres-or-localStorage backend,
   // renders a sorted list of (fen, uci, times_played, last_played), with
   // a background probe to annotate each with its Stockfish eval.
+  //
+  // DEFENSIVE: register window.__openVariationReport FIRST, before any
+  // DOM lookups. If the modal element isn't present (old cached HTML vs
+  // new JS), the function shows a clear 'please reload' message instead
+  // of silently un-registering itself. The old code did an early return
+  // on `!modal`, which left __openVariationReport undefined and the
+  // click handler alerted 'Report not available yet'.
   (() => {
-    const modal      = document.getElementById('variation-report-modal');
-    if (!modal) return;
+    const modal = document.getElementById('variation-report-modal');
+    if (!modal) {
+      console.warn('[variation-report] modal element missing — HTML may be stale. Registering placeholder.');
+      window.__openVariationReport = () => {
+        alert('The report UI is out of sync with the page — please reload (Cmd+Shift+R or Ctrl+Shift+R) to pick up the latest HTML.');
+      };
+      return;
+    }
     const nameEl     = modal.querySelector('#vr-opening-name');
     const statsEl    = modal.querySelector('#vr-stats');
     const treeEl     = modal.querySelector('#vr-tree');
