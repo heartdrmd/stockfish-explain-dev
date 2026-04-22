@@ -400,6 +400,14 @@
       <!-- Engine output (score / depth / PV lines) — moved below
            move list via CSS `order`. -->
       <div class="ceval">
+        <!-- Big 🎲 V badge shown while the engine is picking a
+             variation move. Only visible when body has
+             .in-variation-fork class; hidden otherwise. -->
+        <div class="ceval-variation-badge" aria-hidden="true">
+          <span class="ceval-v-die">🎲</span>
+          <span class="ceval-v-big">V</span>
+          <span class="ceval-v-label">Variation pick</span>
+        </div>
         <div class="ceval-top">
           <span id="score-pearl" class="pearl">—</span>
           <div class="ceval-meta">

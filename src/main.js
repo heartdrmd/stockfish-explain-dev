@@ -3314,6 +3314,17 @@ async function main() {
               const thinkLimits = useVariation ? variationLimits : searchLimits();
               console.log('[practice] engine turn — searching', { fen, limits: thinkLimits, variationFork });
               document.body.classList.add('practice-thinking');
+              // Big 🎲V badge on the ceval panel so the user can SEE
+              // the engine is in variation-pick mode without reading
+              // the narration text. Toggled back off in onBest.
+              if (useVariation) {
+                document.body.classList.add('in-variation-fork');
+                window.__variationForkInfo = {
+                  index: variationFork.forkIndex,
+                  planned: variationFork.forksPlanned,
+                  thinkMs: variationFork.thinkMs,
+                };
+              }
               const statusHtml = useVariation
                 ? `🎲 <strong>Choosing variation</strong> — fork ${variationFork.forkIndex}/${variationFork.forksPlanned} at full strength · <span id="practice-calc-live" style="opacity:0.85;"></span>`
                 : '⏳ <strong>Engine is thinking…</strong> <span id="practice-calc-live" style="opacity:0.85;"></span>';
@@ -3350,6 +3361,8 @@ async function main() {
                 if (useVariation) {
                   try { if (savedSkill   != null) engine.setSkill(savedSkill);   } catch {}
                   try { if (savedMultiPV != null) engine.setMultiPV(savedMultiPV); } catch {}
+                  document.body.classList.remove('in-variation-fork');
+                  window.__variationForkInfo = null;
                 }
                 // Critical-position detector for the NEXT move's time
                 // budget. Look at the search's history (one entry per

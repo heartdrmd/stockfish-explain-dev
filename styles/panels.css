@@ -3363,6 +3363,45 @@ body.practice-mode.practice-thinking .ceval::after {
   left: 0;
 }
 
+/* 🎲 V variation-pick badge on the ceval panel — hidden by default,
+   big + pulsing while body.in-variation-fork. Uses absolute
+   positioning inside .ceval (which is position:relative-capable). */
+.ceval { position: relative; }
+.ceval-variation-badge {
+  display: none;
+}
+body.in-variation-fork .ceval-variation-badge {
+  display: flex;
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 4;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #ff6b35 0%, #e54b1f 100%);
+  color: #fff;
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  box-shadow: 0 2px 8px rgba(229,75,31,0.5);
+  animation: ceval-v-pulse 1.4s ease-in-out infinite;
+  pointer-events: none;
+}
+.ceval-v-die { font-size: 14px; }
+.ceval-v-big {
+  font-weight: 900;
+  font-size: 16px;
+  line-height: 1;
+}
+.ceval-v-label { font-size: 10px; }
+@keyframes ceval-v-pulse {
+  0%, 100% { transform: scale(1);    opacity: 0.95; }
+  50%      { transform: scale(1.08); opacity: 1; }
+}
+
 /* ───────────────────────────────────────────────────────────────── */
 /* 🎲 Opening variation settings + report modal                      */
 /* ───────────────────────────────────────────────────────────────── */
