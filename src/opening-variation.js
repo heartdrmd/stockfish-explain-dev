@@ -186,7 +186,10 @@ export async function fetchHistoryForFen(fen) {
   }));
 }
 
-export async function recordPlay(fen, uci) {
+// prefixMoves: space-separated UCI chain from the game's starting
+// position to (but not including) `fen`. Stored alongside the record
+// so the report can rebuild an ECO tree with shared-prefix grouping.
+export async function recordPlay(fen, uci, prefixMoves = null) {
   if (!_session || !_session.remember) return;
   const opName = _session.openingName;
   const opEco  = _session.openingEco;
@@ -196,7 +199,7 @@ export async function recordPlay(fen, uci) {
         method: 'POST',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ fen, uci, opening_name: opName, opening_eco: opEco }),
+        body: JSON.stringify({ fen, uci, opening_name: opName, opening_eco: opEco, prefix_moves: prefixMoves }),
       });
     } catch (err) { console.warn('[variations] recordPlay POST failed', err); }
   } else {
@@ -207,6 +210,7 @@ export async function recordPlay(fen, uci) {
     cur.at = new Date().toISOString();
     cur.opName = opName || cur.opName;
     cur.opEco  = opEco  || cur.opEco;
+    if (prefixMoves) cur.prefix = prefixMoves;
     mem[fen][uci] = cur;
     saveGuestMemory(mem);
   }
@@ -286,7 +290,13 @@ export async function openingReport(openingName) {
     for (const uci of Object.keys(mem[fen])) {
       const e = mem[fen][uci];
       if (e?.opName === openingName) {
-        out.push({ fen, uci, times_played: e.times || 1, last_played: e.at, opening_eco: e.opEco });
+        out.push({
+          fen, uci,
+          times_played: e.times || 1,
+          last_played: e.at,
+          opening_eco: e.opEco,
+          prefix_moves: e.prefix || null,
+        });
       }
     }
   }

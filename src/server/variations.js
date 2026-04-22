@@ -23,24 +23,26 @@ export function wireVariations(app) {
   // ── record a play (upsert, increment counter on conflict) ────────
   app.post('/api/variations', requireAuth, async (req, res) => {
     try {
-      const { fen, uci, opening_name, opening_eco } = req.body || {};
+      const { fen, uci, opening_name, opening_eco, prefix_moves } = req.body || {};
       if (!fen || typeof fen !== 'string' || fen.length > 200) {
         return res.status(400).json({ error: 'fen required (≤ 200 chars)' });
       }
       if (!uci || !/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(uci)) {
         return res.status(400).json({ error: 'uci must match standard move pattern' });
       }
-      const op    = opening_name ? String(opening_name).slice(0, 120) : null;
-      const eco   = opening_eco  ? String(opening_eco).slice(0, 10)   : null;
+      const op     = opening_name ? String(opening_name).slice(0, 120) : null;
+      const eco    = opening_eco  ? String(opening_eco).slice(0, 10)   : null;
+      const prefix = prefix_moves ? String(prefix_moves).slice(0, 2000) : null;
       await query(
-        `INSERT INTO variation_memory (user_id, fen, uci, opening_name, opening_eco)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO variation_memory (user_id, fen, uci, opening_name, opening_eco, prefix_moves)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (user_id, fen, uci) DO UPDATE
            SET times_played  = variation_memory.times_played + 1,
                last_played   = NOW(),
                opening_name  = COALESCE(EXCLUDED.opening_name, variation_memory.opening_name),
-               opening_eco   = COALESCE(EXCLUDED.opening_eco,  variation_memory.opening_eco)`,
-        [req.user.id, fen, uci, op, eco]
+               opening_eco   = COALESCE(EXCLUDED.opening_eco,  variation_memory.opening_eco),
+               prefix_moves  = COALESCE(EXCLUDED.prefix_moves, variation_memory.prefix_moves)`,
+        [req.user.id, fen, uci, op, eco, prefix]
       );
       res.json({ ok: true });
     } catch (err) {
@@ -72,7 +74,7 @@ export function wireVariations(app) {
     try {
       const name = String(req.params.name || '');
       const { rows } = await query(
-        `SELECT fen, uci, opening_eco, times_played, last_played
+        `SELECT fen, uci, opening_eco, times_played, last_played, prefix_moves
            FROM variation_memory
           WHERE user_id = $1 AND opening_name = $2
           ORDER BY last_played DESC`,

@@ -167,6 +167,20 @@ const migrations = [
         ON variation_memory(user_id, fen);
     `,
   },
+  {
+    // Add prefix_moves: the UCI chain from the game's STARTING position
+    // up to (but not including) the deviation's FEN. Space-separated
+    // (e.g. "e2e4 c7c5 c2c3 d7d5"). Needed so the variation-report can
+    // rebuild a real ECO-style tree — grouping deviations by their
+    // shared game-path prefix. Without it, every deviation looks like a
+    // disconnected root (different FENs, no chain). Legacy rows keep
+    // NULL; the client falls back to flat-list for those.
+    name: '009_variation_prefix_moves',
+    sql: `
+      ALTER TABLE variation_memory
+        ADD COLUMN IF NOT EXISTS prefix_moves TEXT;
+    `,
+  },
 ];
 
 export async function runMigrations() {

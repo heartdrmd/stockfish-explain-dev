@@ -3407,7 +3407,15 @@ async function main() {
                     // maxDeviations cap is hit.
                     if (didDeviate) {
                       try { OpeningVariation.noteDeviation(); } catch {}
-                      try { await OpeningVariation.recordPlay(fen, finalUci); } catch {}
+                      try {
+                        // Snapshot the UCI path from game-start to this
+                        // position so the report can rebuild an ECO
+                        // tree grouped by shared prefixes.
+                        const prefixMoves = board.chess.history({ verbose: true })
+                          .map(m => m.from + m.to + (m.promotion || ''))
+                          .join(' ');
+                        await OpeningVariation.recordPlay(fen, finalUci, prefixMoves);
+                      } catch {}
                     }
                     console.log('[practice] engine plays (variation fork', variationFork.forkIndex + (didDeviate ? ', DEVIATED' : ', best') + ')', finalUci);
                     board.playEngineMove(finalUci);
@@ -8555,55 +8563,96 @@ async function main() {
       return (v >= 0 ? '+' : '') + v.toFixed(2);
     }
 
-    // Build an ECO tree by grouping entries by FEN and walking forward.
-    // Each node: { fen, uci, san, times, last_played, children[] }.
-    // Returns array of root-level nodes (distinct first-fork positions).
+    // Build an ECO tree from entries that carry prefix_moves (UCI
+    // chain from game-start to the deviation's FEN). Entries with
+    // overlapping prefixes collapse into shared branches.
+    //
+    // Strategy: each entry's FULL LINE = prefix_moves + ' ' + uci. We
+    // merge these into a trie keyed by UCI-per-ply. Leaves hold the
+    // (times, last_played, eval) data.
+    //
+    // Legacy rows without prefix_moves fall back to a flat list —
+    // rendered as single-node branches with no context, same as the
+    // pre-fix behaviour. Mixed entries work correctly: prefixed ones
+    // collapse; bare ones show flat.
     function buildEcoTree(entries) {
-      const byFen = new Map();
+      const root = { children: new Map() };          // trie node
+      const flatLegacy = [];                         // entries without prefix_moves
       for (const e of entries) {
-        if (!byFen.has(e.fen)) byFen.set(e.fen, []);
-        byFen.get(e.fen).push(e);
+        if (!e.prefix_moves && e.prefix_moves !== '') {
+          flatLegacy.push(e);
+          continue;
+        }
+        const ucis = e.prefix_moves ? e.prefix_moves.split(/\s+/).filter(Boolean) : [];
+        ucis.push(e.uci);  // append the deviation move as the final ply
+        let node = root;
+        for (let i = 0; i < ucis.length; i++) {
+          const u = ucis[i];
+          if (!node.children.has(u)) node.children.set(u, { children: new Map() });
+          node = node.children.get(u);
+        }
+        // Attach leaf data (may overwrite — OK, tied moves are merged).
+        node.leaf = {
+          fen: e.fen,
+          uci: e.uci,
+          times: e.times_played || 1,
+          last_played: e.last_played,
+          prefix_moves: e.prefix_moves || '',
+        };
       }
-      // Sort each FEN's moves by times_played desc so most-played
-      // variations appear first.
-      for (const arr of byFen.values()) {
-        arr.sort((a, b) => (b.times_played || 0) - (a.times_played || 0));
-      }
-      // Find root FENs — ones that aren't reached by applying any
-      // recorded move from another FEN. Safer: find the FEN with the
-      // smallest ply number among those present.
-      const allFens = new Set(entries.map(e => e.fen));
-      const reachedFens = new Set();
-      for (const e of entries) {
-        const next = applyMove(e.fen, e.uci);
-        if (next) reachedFens.add(next);
-      }
-      const rootFens = [...allFens].filter(f => !reachedFens.has(f));
-      if (rootFens.length === 0 && allFens.size > 0) {
-        // Pick lowest-ply as root fallback.
-        rootFens.push([...allFens].sort((a, b) => plyNumberFromFen(a) - plyNumberFromFen(b))[0]);
-      }
-      function walk(fen, depth, visited) {
-        if (visited.has(fen)) return [];
-        visited.add(fen);
-        const moves = byFen.get(fen) || [];
-        return moves.map(m => {
-          const nextFen = applyMove(fen, m.uci);
-          return {
-            fen: m.fen,
-            uci: m.uci,
-            nextFen,
-            san: uciToSan(fen, m.uci),
-            times: m.times_played || 1,
-            last_played: m.last_played,
+
+      // Walk the trie, producing the display tree. Each display node
+      // contains { san, uci, fenBefore, fenAfter, times, last_played,
+      // depth, isLeaf, children[] }.
+      const startFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+      function walk(node, depth, fenBefore) {
+        const out = [];
+        // Sort children by times_played-descendants desc so popular
+        // lines appear first.
+        const entries_ = [...node.children.entries()].map(([u, child]) => ({ u, child }));
+        entries_.sort((a, b) => totalTimes(b.child) - totalTimes(a.child));
+        for (const { u, child } of entries_) {
+          const fenAfter = applyMove(fenBefore, u);
+          const san = uciToSan(fenBefore, u);
+          const disp = {
+            uci: u,
+            san,
+            fenBefore,
+            fenAfter,
             depth,
-            children: nextFen ? walk(nextFen, depth + 1, new Set(visited)) : [],
+            isLeaf: !!child.leaf,
+            times: child.leaf ? child.leaf.times : null,
+            last_played: child.leaf ? child.leaf.last_played : null,
+            children: [],
           };
+          disp.children = fenAfter ? walk(child, depth + 1, fenAfter) : [];
+          out.push(disp);
+        }
+        return out;
+      }
+      function totalTimes(trieNode) {
+        let t = trieNode.leaf ? (trieNode.leaf.times || 1) : 0;
+        for (const c of trieNode.children.values()) t += totalTimes(c);
+        return t;
+      }
+      const tree = walk(root, 0, startFen);
+
+      // Legacy entries (no prefix) — append as flat 'rootless' nodes.
+      for (const e of flatLegacy) {
+        tree.push({
+          uci: e.uci,
+          san: uciToSan(e.fen, e.uci),
+          fenBefore: e.fen,
+          fenAfter: applyMove(e.fen, e.uci),
+          depth: 0,
+          isLeaf: true,
+          times: e.times_played || 1,
+          last_played: e.last_played,
+          children: [],
+          _legacy: true,
         });
       }
-      const roots = [];
-      for (const rf of rootFens) roots.push(...walk(rf, 0, new Set()));
-      return roots;
+      return tree;
     }
 
     // Flatten the tree into printable rows with ASCII tree connectors.
@@ -8614,40 +8663,40 @@ async function main() {
         return;
       }
       const rows = [];
-      function emit(node, prefix, isLast, siblingCount) {
-        const connector = prefix === ''
-          ? ''
-          : (isLast ? '└─ ' : '├─ ');
-        const ply = plyNumberFromFen(node.fen);
+      function emit(node, prefix, isLast) {
+        const connector = prefix === '' ? '' : (isLast ? '└─ ' : '├─ ');
+        const ply = plyNumberFromFen(node.fenBefore);
         const full = Math.ceil(ply / 2);
-        const moveNum = (ply % 2 === 1) ? `${full}.`  : `${full}…`;
-        const cached = fenEvalCache.get(node.nextFen || node.fen) || {};
-        const evalStr = fmtEval(cached.cpWhite, cached.mate);
+        const moveNum = (ply % 2 === 1) ? `${full}.` : `${full}…`;
+        const cached = fenEvalCache.get(node.fenAfter || node.fenBefore) || {};
+        const evalStr = node.isLeaf ? fmtEval(cached.cpWhite, cached.mate) : '';
         const indent = prefix + connector;
-        rows.push(`<div class="vr-node" data-fen="${escHtml(node.fen)}" data-uci="${escHtml(node.uci)}">
-          <span class="vr-moves">${escHtml(indent)}${moveNum} <b>${escHtml(node.san)}</b></span>
-          <span class="vr-count">${node.times}×</span>
-          <span class="vr-eval" data-next-fen="${escHtml(node.nextFen || node.fen)}">${evalStr}</span>
-          <span class="vr-date">${fmtRelDate(node.last_played)}</span>
+        const timesCell = node.isLeaf ? `${node.times}×` : '';
+        const dateCell  = node.isLeaf ? fmtRelDate(node.last_played) : '';
+        const legacyTag = node._legacy
+          ? ` <span class="muted" style="font-size:10px;">(no prefix · legacy)</span>`
+          : '';
+        rows.push(`<div class="vr-node" data-fen="${escHtml(node.fenBefore)}" data-uci="${escHtml(node.uci)}" data-next-fen="${escHtml(node.fenAfter || '')}">
+          <span class="vr-moves">${escHtml(indent)}${moveNum} <b>${escHtml(node.san)}</b>${legacyTag}</span>
+          <span class="vr-count">${timesCell}</span>
+          <span class="vr-eval" data-eval-fen="${escHtml(node.fenAfter || node.fenBefore)}">${evalStr}</span>
+          <span class="vr-date">${dateCell}</span>
         </div>`);
-        // Recurse into children.
         const n = node.children.length;
         node.children.forEach((child, i) => {
           const childPrefix = prefix + (prefix === '' ? '   ' : (isLast ? '    ' : '│   '));
-          emit(child, childPrefix, i === n - 1, n);
+          emit(child, childPrefix, i === n - 1);
         });
       }
       for (let i = 0; i < _currentTree.length; i++) {
-        emit(_currentTree[i], '', i === _currentTree.length - 1, _currentTree.length);
+        emit(_currentTree[i], '', i === _currentTree.length - 1);
       }
       treeEl.innerHTML = rows.join('');
 
       // Click a row → load the AFTER-move position on the board.
       treeEl.querySelectorAll('.vr-node').forEach(el => {
         el.addEventListener('click', () => {
-          const fromFen = el.dataset.fen;
-          const uci = el.dataset.uci;
-          const nextFen = applyMove(fromFen, uci);
+          const nextFen = el.dataset.nextFen;
           if (!nextFen) return;
           try {
             board.chess.load(nextFen);
@@ -8676,7 +8725,7 @@ async function main() {
         try {
           await AICoach.probeEngine(engine, nextFen, 14, 1, 0);
           if (modal.hidden) return;
-          const el = treeEl.querySelector(`.vr-eval[data-next-fen="${CSS.escape(nextFen)}"]`);
+          const el = treeEl.querySelector(`.vr-eval[data-eval-fen="${CSS.escape(nextFen)}"]`);
           if (el) {
             const cached = fenEvalCache.get(nextFen) || {};
             el.textContent = fmtEval(cached.cpWhite, cached.mate);
