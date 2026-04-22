@@ -46,6 +46,7 @@ import * as Archive from './game_archive.js';
 import { EvalGraph }     from './eval-graph.js';
 import { computeGameStats, renderStatsPanel } from './game-stats.js';
 import * as MoveTime from './movetime.js';
+import * as OpeningVariation from './opening-variation.js';
 
 // Expose Chess to eval-graph's computeDivision helper — avoids a
 // circular import while still letting it replay SAN to count pieces
@@ -3276,9 +3277,31 @@ async function main() {
                 setTimeout(() => board.playEngineMove(uci), 150);
                 return;
               }
-              console.log('[practice] engine turn — searching', { fen, limits: searchLimits() });
+              // ─── Opening variation mode: in-window engine turn ────
+              // When the user enabled the variation feature AND we're
+              // still inside the N-fork window, bump the engine to
+              // full strength + MultiPV 5 + the configured think time
+              // and let OpeningVariation.pickCandidate select from
+              // the top MultiPV with anti-repetition weighting.
+              let variationFork = null;
+              try { if (OpeningVariation.isActive()) variationFork = OpeningVariation.consumeFork(); } catch {}
+              const useVariation = !!variationFork;
+              const variationLimits = useVariation ? { movetime: variationFork.thinkMs } : null;
+
+              const savedSkill = useVariation ? engine.skill : null;
+              const savedMultiPV = useVariation ? engine.multipv : null;
+              if (useVariation) {
+                try { engine.setSkill(20); } catch {}
+                try { engine.setMultiPV(5); } catch {}
+              }
+
+              const thinkLimits = useVariation ? variationLimits : searchLimits();
+              console.log('[practice] engine turn — searching', { fen, limits: thinkLimits, variationFork });
               document.body.classList.add('practice-thinking');
-              ui.narrationText.innerHTML = '⏳ <strong>Engine is thinking…</strong> <span id="practice-calc-live" style="opacity:0.85;"></span>';
+              const statusHtml = useVariation
+                ? `🎲 <strong>Choosing variation</strong> — fork ${variationFork.forkIndex}/${variationFork.forksPlanned} at full strength · <span id="practice-calc-live" style="opacity:0.85;"></span>`
+                : '⏳ <strong>Engine is thinking…</strong> <span id="practice-calc-live" style="opacity:0.85;"></span>';
+              ui.narrationText.innerHTML = statusHtml;
               // Live-calculation ticker: update on each 'thinking' info
               // event so the user can SEE that the engine is actively
               // searching (not frozen). Shows depth + nodes, but never
@@ -3302,9 +3325,16 @@ async function main() {
               // makes a move before bestmove arrives, the token
               // increments and the old listener bails out.
               const myToken = ++practiceSearchToken;
-              const onBest = (ev) => {
+              const onBest = async (ev) => {
                 engine.removeEventListener('bestmove', onBest);
                 detachTicker();
+                // Restore skill/MultiPV before ANY other work — even
+                // if we bail on a stale token, the engine state must
+                // go back to the user's chosen values.
+                if (useVariation) {
+                  try { if (savedSkill   != null) engine.setSkill(savedSkill);   } catch {}
+                  try { if (savedMultiPV != null) engine.setMultiPV(savedMultiPV); } catch {}
+                }
                 // Critical-position detector for the NEXT move's time
                 // budget. Look at the search's history (one entry per
                 // info ply): (1) how many times the #1 move changed;
@@ -3339,21 +3369,41 @@ async function main() {
                 }
                 document.body.classList.remove('practice-thinking');
                 if (ev.detail.best && ev.detail.best !== '(none)') {
-                  // Style-bias: pick from the engine's top candidates
-                  // using a persona weighting function. Falls back to
-                  // the engine's #1 when style is default or only one
-                  // candidate is available.
-                  const style = window.__practiceStyle || 'default';
-                  const pickedUci = pickMoveByStyle(ev.detail.topMoves, style, chessNow, ev.detail.best);
-                  console.log('[practice] engine plays', pickedUci, '(style:', style, ')');
-                  board.playEngineMove(pickedUci);
+                  // Opening-variation path takes precedence over the
+                  // style picker. Style bias only applies AFTER the
+                  // variation window is exhausted.
+                  if (useVariation && variationFork) {
+                    let picked = null;
+                    try {
+                      picked = await OpeningVariation.pickCandidate(
+                        ev.detail.topMoves || [],
+                        fen,
+                        variationFork,
+                      );
+                    } catch (err) {
+                      console.warn('[variation] pickCandidate failed; falling back to best', err);
+                    }
+                    const finalUci = picked || ev.detail.best;
+                    try { await OpeningVariation.recordPlay(fen, finalUci); } catch {}
+                    console.log('[practice] engine plays (variation fork', variationFork.forkIndex + ')', finalUci);
+                    board.playEngineMove(finalUci);
+                  } else {
+                    // Style-bias: pick from the engine's top candidates
+                    // using a persona weighting function. Falls back to
+                    // the engine's #1 when style is default or only one
+                    // candidate is available.
+                    const style = window.__practiceStyle || 'default';
+                    const pickedUci = pickMoveByStyle(ev.detail.topMoves, style, chessNow, ev.detail.best);
+                    console.log('[practice] engine plays', pickedUci, '(style:', style, ')');
+                    board.playEngineMove(pickedUci);
+                  }
                 } else {
                   console.log('[practice] engine returned (none) — probably game over');
                   ui.narrationText.innerHTML = 'Engine has no legal moves — game over.';
                 }
               };
               engine.addEventListener('bestmove', onBest);
-              engine.start(fen, searchLimits());
+              engine.start(fen, thinkLimits);
             } else {
               // User's turn — engine stays idle. Don't show analysis.
               console.log('[practice] your turn — engine idle');
@@ -5356,6 +5406,16 @@ async function main() {
       practiceSearchToken++;   // invalidate any in-flight bestmove listener
       document.body.classList.add('practice-mode');
       document.body.classList.remove('practice-finished');
+      // Opening variation session — starts a fresh fork counter.
+      // If the feature is disabled in settings, startSession still
+      // runs but isActive() returns false so the engine-turn block
+      // falls through to the normal path.
+      try {
+        const opEco = op.eco || null;
+        OpeningVariation.startSession(op.name || null, opEco);
+      } catch (err) {
+        console.warn('[variation] startSession failed', err);
+      }
       // Reveal the in-progress practice-actions card and reset the
       // post-game panel in case a previous game had flipped to
       // finished state.
@@ -5476,6 +5536,7 @@ async function main() {
     document.body.classList.add('practice-finished');
     document.body.classList.remove('practice-thinking');
     if (!prevNavCollapsed) document.body.classList.remove('nav-collapsed');
+    try { OpeningVariation.endSession(); } catch {}
     // Stop any in-flight engine search AND invalidate its token so if
     // a bestmove fires after `stop` (as Stockfish does — it emits the
     // best move found so far) the listener bails rather than playing
