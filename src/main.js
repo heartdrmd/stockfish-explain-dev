@@ -5413,6 +5413,8 @@ async function main() {
       try {
         const opEco = op.eco || null;
         OpeningVariation.startSession(op.name || null, opEco);
+        window.__practiceLastOpName = op.name || null;   // for settings + report modals
+        window.__practiceLastOpEco  = opEco;
       } catch (err) {
         console.warn('[variation] startSession failed', err);
       }
@@ -8291,6 +8293,133 @@ async function main() {
     if (dlStatus) dlStatus.textContent = '✓ Download started. If nothing happens, check browser downloads.';
     setTimeout(() => { if (dlModal) dlModal.hidden = true; }, 1200);
   });
+  // ─── 🎲 Opening Variation settings modal wiring ──────────────────
+  // Opens from the "practice-variation-settings" button in the
+  // practice modal (plus exposed via window.__openVariationSettings
+  // so future entry points can reach it). All state lives in
+  // opening-variation.js; this block just binds inputs → setters.
+  (() => {
+    const btn         = document.getElementById('practice-variation-settings');
+    const summary     = document.getElementById('practice-variation-summary');
+    const modal       = document.getElementById('variation-settings-modal');
+    if (!modal) return;
+    const $ = (id) => modal.querySelector('#' + id);
+    const inEnabled   = $('vs-enabled');
+    const inForks     = $('vs-max-forks');
+    const inForksVal  = $('vs-max-forks-val');
+    const inThink     = $('vs-think-ms');
+    const inThinkVal  = $('vs-think-ms-val');
+    const inEarly     = $('vs-early-tol');
+    const inEarlyVal  = $('vs-early-tol-val');
+    const inTighten   = $('vs-tighten');
+    const inLateRow   = $('vs-late-row');
+    const inLate      = $('vs-late-tol');
+    const inLateVal   = $('vs-late-tol-val');
+    const inRemember  = $('vs-remember');
+    const btnReset    = $('vs-reset-memory');
+    const btnReport   = $('vs-view-report');
+    const btnClose    = $('vs-close');
+    const btnCancel   = $('vs-cancel');
+    const btnSave     = $('vs-save');
+    const btnRestore  = $('vs-restore');
+    const memoryHint  = $('vs-memory-hint');
+
+    function loadToForm() {
+      const s = OpeningVariation.getSettings();
+      inEnabled.checked = !!s.enabled;
+      inForks.value     = s.maxForks;     inForksVal.textContent = s.maxForks;
+      inThink.value     = Math.round(s.thinkMs / 1000);  inThinkVal.textContent = Math.round(s.thinkMs / 1000);
+      inEarly.value     = s.earlyTolerance;  inEarlyVal.textContent = s.earlyTolerance;
+      inTighten.checked = !!s.tighten;
+      inLate.value      = s.lateTolerance;   inLateVal.textContent  = s.lateTolerance;
+      inLateRow.hidden  = !s.tighten;
+      inRemember.checked = !!s.rememberMemory;
+      const dw = s.devWeight || 'strong';
+      const radios = modal.querySelectorAll('input[name="vs-dev-weight"]');
+      radios.forEach(r => r.checked = (r.value === dw));
+      // Memory-scope hint: show which opening the reset+report act on.
+      const lastOp = window.__practiceLastOpName || null;
+      if (memoryHint) {
+        memoryHint.textContent = lastOp
+          ? `Reset + report act on: ${lastOp}.`
+          : 'Pick an opening in the practice modal first — reset + report act on that opening.';
+      }
+    }
+
+    function formToObject() {
+      const dwEl = Array.from(modal.querySelectorAll('input[name="vs-dev-weight"]')).find(r => r.checked);
+      return {
+        enabled:        inEnabled.checked,
+        maxForks:       +inForks.value,
+        thinkMs:        (+inThink.value) * 1000,
+        earlyTolerance: +inEarly.value,
+        tighten:        inTighten.checked,
+        lateTolerance:  +inLate.value,
+        devWeight:      dwEl ? dwEl.value : 'strong',
+        rememberMemory: inRemember.checked,
+      };
+    }
+
+    function refreshSummaryChip() {
+      if (!summary) return;
+      const s = OpeningVariation.getSettings();
+      if (!s.enabled) { summary.textContent = 'Opening variation: off'; return; }
+      summary.textContent = `Opening variation: ${s.maxForks} forks · ${s.earlyTolerance}${s.tighten ? '→' + s.lateTolerance : ''} cp · ${Math.round(s.thinkMs/1000)}s · ${s.devWeight}`;
+    }
+    refreshSummaryChip();
+
+    // Live-value updates on slider input
+    inForks.addEventListener('input', () => inForksVal.textContent = inForks.value);
+    inThink.addEventListener('input', () => inThinkVal.textContent = inThink.value);
+    inEarly.addEventListener('input', () => inEarlyVal.textContent = inEarly.value);
+    inLate .addEventListener('input', () => inLateVal.textContent  = inLate.value);
+    inTighten.addEventListener('change', () => inLateRow.hidden = !inTighten.checked);
+
+    // Open/close
+    function open()  { loadToForm(); modal.hidden = false; }
+    function close() { modal.hidden = true; }
+    if (btn) btn.addEventListener('click', open);
+    btnClose.addEventListener('click', close);
+    btnCancel.addEventListener('click', close);
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    window.__openVariationSettings = open;
+
+    btnSave.addEventListener('click', () => {
+      OpeningVariation.saveSettings(formToObject());
+      refreshSummaryChip();
+      close();
+    });
+    btnRestore.addEventListener('click', () => {
+      OpeningVariation.resetSettings();
+      loadToForm();
+    });
+
+    // Reset memory for the last-played opening (confirm-gated).
+    btnReset.addEventListener('click', async () => {
+      const opName = window.__practiceLastOpName;
+      if (!opName) {
+        alert('Start a practice game with an opening first, then come back here to reset its memory.');
+        return;
+      }
+      if (!confirm(`Forget all variations played in "${opName}"? You'll start fresh next time.`)) return;
+      try {
+        await OpeningVariation.resetOpeningMemory(opName);
+        alert(`Memory cleared for "${opName}".`);
+      } catch (err) {
+        alert('Reset failed: ' + (err.message || err));
+      }
+    });
+
+    // View report — delegates to the report modal opener (built in main.js below).
+    btnReport.addEventListener('click', () => {
+      if (typeof window.__openVariationReport === 'function') {
+        window.__openVariationReport(window.__practiceLastOpName || null);
+      } else {
+        alert('Report not available yet — make sure the page finished loading.');
+      }
+    });
+  })();
+
   // ─── Reset data (🗑) — wipes local mistakes/drills and optionally ─
   //      deletes all cloud games. Destructive, so confirmation modal
   //      lets the user opt-in to each bucket independently.

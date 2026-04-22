@@ -694,6 +694,14 @@
           <small class="muted">Style biases the engine toward a specific type of move from its top candidates. Skill still controls raw strength.</small>
         </div>
         <div class="setting" style="grid-column: 1 / -1;">
+          <label style="font-weight:600;display:block;margin-bottom:6px;">🎲 Opening variation</label>
+          <button id="practice-variation-settings" type="button" class="btn" style="width:100%;padding:10px 14px;background:linear-gradient(180deg,#2d3a4a 0%,#1f2a36 100%);border:1px solid #3a4a5a;color:#cfe0f5;font-weight:500;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <span>🎲 <span id="practice-variation-summary">Opening variation: off</span></span>
+            <span style="opacity:0.6;font-size:11px;">click to configure ⚙</span>
+          </button>
+          <small class="muted">Engine picks slightly-suboptimal-but-sound moves in the opening so the same practice line never repeats exactly. Anti-repetition memory stored per-user.</small>
+        </div>
+        <div class="setting" style="grid-column: 1 / -1;">
           <label for="practice-clock-mode" style="font-weight:600;">⏱ Clock mode</label>
           <select id="practice-clock-mode">
             <option value="none" selected>No clock — hide the clock card entirely</option>
@@ -1244,6 +1252,100 @@
       <canvas id="live-movetime-chart"></canvas>
     </div>
     <div class="live-graph-stats" id="live-graph-stats"></div>
+  </div>
+
+  <!-- 🎲 Opening Variation settings modal — configurable deviation
+       behaviour for practice. Opened from the practice modal's
+       "🎲 Opening variation" button. All values persist to
+       localStorage via opening-variation.js. -->
+  <div id="variation-settings-modal" class="modal" hidden>
+    <div class="modal-card" style="max-width:560px;">
+      <button class="modal-close" id="vs-close" aria-label="Close">×</button>
+      <h3 style="margin-top:0;">🎲 Opening variation</h3>
+      <p class="muted" style="font-size:12px;margin:-4px 0 14px;">
+        Engine picks slightly-suboptimal-but-sound moves at the first few
+        forks of the opening so repeat drills of the same line don't play out
+        identically. Every fork runs at <strong>Skill 20 + MultiPV 5</strong>.
+      </p>
+
+      <section class="vs-section">
+        <label class="vs-row"><input type="checkbox" id="vs-enabled"> <span><strong>Enable variation mode</strong></span></label>
+      </section>
+
+      <section class="vs-section">
+        <h4 class="vs-h">📏 Range</h4>
+        <div class="vs-row">
+          <label for="vs-max-forks">Vary for first&nbsp;</label>
+          <input type="range" id="vs-max-forks" min="1" max="15" step="1">
+          <span id="vs-max-forks-val" class="vs-val">5</span>
+          <span class="muted">forks</span>
+        </div>
+        <div class="vs-row">
+          <label for="vs-think-ms">Think time per fork&nbsp;</label>
+          <input type="range" id="vs-think-ms" min="15" max="120" step="5">
+          <span id="vs-think-ms-val" class="vs-val">30</span>
+          <span class="muted">s</span>
+        </div>
+      </section>
+
+      <section class="vs-section">
+        <h4 class="vs-h">🎯 Tolerance (how far from best to stray)</h4>
+        <div class="vs-row">
+          <label for="vs-early-tol">Early tolerance (fork #1)&nbsp;</label>
+          <input type="range" id="vs-early-tol" min="10" max="100" step="5">
+          <span id="vs-early-tol-val" class="vs-val">50</span>
+          <span class="muted">cp</span>
+        </div>
+        <label class="vs-row"><input type="checkbox" id="vs-tighten"> <span>Tighten as forks advance</span></label>
+        <div class="vs-row" id="vs-late-row">
+          <label for="vs-late-tol">Late tolerance (fork #N)&nbsp;</label>
+          <input type="range" id="vs-late-tol" min="5" max="50" step="5">
+          <span id="vs-late-tol-val" class="vs-val">10</span>
+          <span class="muted">cp</span>
+        </div>
+      </section>
+
+      <section class="vs-section">
+        <h4 class="vs-h">🎭 Deviation weight (how likely to pick non-#1 early)</h4>
+        <div class="vs-row" role="radiogroup">
+          <label class="vs-radio"><input type="radio" name="vs-dev-weight" value="mild">   <span>Mild (50→15%)</span></label>
+          <label class="vs-radio"><input type="radio" name="vs-dev-weight" value="medium"> <span>Medium (65→18%)</span></label>
+          <label class="vs-radio"><input type="radio" name="vs-dev-weight" value="strong"> <span>Strong (80→20%)</span></label>
+        </div>
+      </section>
+
+      <section class="vs-section">
+        <h4 class="vs-h">🧠 Memory (anti-repetition)</h4>
+        <label class="vs-row"><input type="checkbox" id="vs-remember"> <span>Remember which variations I've faced</span></label>
+        <div class="vs-row" style="gap:8px;flex-wrap:wrap;">
+          <button type="button" id="vs-reset-memory" class="btn vs-btn-danger">🔁 Reset memory for this opening…</button>
+          <button type="button" id="vs-view-report"  class="btn">📊 View variation report</button>
+        </div>
+        <small class="muted" id="vs-memory-hint">Pick an opening in the practice modal first — reset + report act on that opening.</small>
+      </section>
+
+      <div class="vs-footer">
+        <button type="button" id="vs-restore" class="btn">Restore defaults</button>
+        <span style="flex:1;"></span>
+        <button type="button" id="vs-cancel"  class="btn">Cancel</button>
+        <button type="button" id="vs-save"    class="btn" style="background:var(--c-primary);color:#fff;font-weight:600;">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 📊 Variation report modal — tree of lines played per opening. -->
+  <div id="variation-report-modal" class="modal" hidden>
+    <div class="modal-card" style="max-width:720px;">
+      <button class="modal-close" id="vr-close" aria-label="Close">×</button>
+      <h3 style="margin-top:0;">📊 Variation report — <span id="vr-opening-name">—</span></h3>
+      <div id="vr-stats" class="muted" style="font-size:12px;margin-bottom:12px;">—</div>
+      <div id="vr-tree" class="vr-tree" style="max-height:50vh;overflow-y:auto;font-family:var(--font-san);font-size:14px;"></div>
+      <div class="vs-footer" style="margin-top:12px;">
+        <button type="button" id="vr-download-pgn" class="btn">💾 Download all lines as PGN</button>
+        <span style="flex:1;"></span>
+        <button type="button" id="vr-reset" class="btn vs-btn-danger">🔁 Reset this opening</button>
+      </div>
+    </div>
   </div>
 
   <!-- AGPL-3.0: network users must be informed where to get the source.
