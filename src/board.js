@@ -189,6 +189,25 @@ export class BoardController extends EventTarget {
         console.log('[move-input] no legal moves to target → target-first aborted', { target });
         return;
       }
+      // OFF-TURN GUARD: when playerColor is set to 'white' or 'black'
+      // (practice mode, not analysis), target-first must NOT accept
+      // moves whose side-to-move is different from the user's color.
+      // Without this guard, user in a practice game (black) can click
+      // a target square during engine's (white's) turn, target-first
+      // finds legal WHITE moves to that square, and plays one for the
+      // engine. That's how Bxh6 got played accidentally during the
+      // engine's variation-fork search — user's click overrode the
+      // engine's still-thinking answer.
+      if (this.playerColor === 'white' || this.playerColor === 'black') {
+        const turnLetter = effectiveChess.turn();         // 'w' | 'b'
+        const userLetter = this.playerColor[0];
+        if (turnLetter !== userLetter) {
+          console.log('[move-input] target-first off-turn: not your move to make', {
+            target, turn: turnLetter, user: userLetter,
+          });
+          return;
+        }
+      }
       // Multi-source policy:
       //   - CLICK (no drag)   → bail silently; the 'which piece?'
       //                         prompt was confusing. User picks the
@@ -561,23 +580,10 @@ export class BoardController extends EventTarget {
       viewPly: this.viewPly,
       fenBefore: this.chess.fen(),
     });
-    // ─── Post-game mainline lock ──────────────────────────────────
-    // Once a practice game has ended, the game notation stays as
-    // "gospel" — no more moves extend the mainline. User can still
-    // explore variations by clicking back to any earlier ply and
-    // playing a different move there; those become sibling branches
-    // (because the mainline already has a child at that path).
-    // Only block moves AT the terminal leaf (no next move recorded).
-    if (document.body.classList.contains('practice-finished')) {
-      const nodesAt = this.tree.nodesAlong(this.tree.currentPath);
-      const currentNode = nodesAt.length ? nodesAt[nodesAt.length - 1] : this.tree.root;
-      const atLeaf = currentNode && (!currentNode.children || currentNode.children.length === 0);
-      if (atLeaf && this.isAtLive()) {
-        console.log('[move] blocked — game ended at this position; navigate back to explore variations');
-        try { this._syncToChessground(); } catch {}
-        return;
-      }
-    }
+    // Post-game exploration is allowed: archiveCurrentGame uses a
+    // snapshot taken at finishPracticeGame time (board._archiveSnapshot),
+    // not live chess.history(), so extending the tree after game-end
+    // can't corrupt the saved record.
     if (!this.isAtLive()) {
       // User moved from an old ply — truncate chess.js to the view ply
       // and branch from here. The variation tree keeps the old line as a

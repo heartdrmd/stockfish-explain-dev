@@ -3071,12 +3071,18 @@ async function main() {
   // eval from fenEvalCache. Tolerates missing cache entries (stores
   // cpWhite: null for those plies).
   function archiveCurrentGame({ result, ending, mode }) {
-    const history = board.chess.history({ verbose: true });
+    // Prefer the snapshot taken at finishPracticeGame time over the
+    // live chess.history — so post-game exploration (user playing
+    // 'what-if' moves after resign/mate) doesn't change what gets
+    // saved. The snapshot is cleared once archive succeeds.
+    const snap = board._archiveSnapshot;
+    const history     = (snap && snap.history) || board.chess.history({ verbose: true });
+    const startingFen = (snap && snap.startingFen) || board.startingFen;
     if (!history.length) return false;
     // Walk the starting FEN forward, applying each SAN, collecting per-
     // ply records. We prefer FENs from fenEvalCache — if a position was
     // never evaluated, cpWhite stays null.
-    const replay = new Chess(board.startingFen);
+    const replay = new Chess(startingFen);
     const plies = [];
     for (let i = 0; i < history.length; i++) {
       const mv = history[i];
@@ -5605,6 +5611,23 @@ async function main() {
     document.body.classList.remove('practice-thinking');
     if (!prevNavCollapsed) document.body.classList.remove('nav-collapsed');
     try { OpeningVariation.endSession(); } catch {}
+    // Snapshot the game history NOW — frozen at game-end time. The
+    // async sweep/verify/archive chain below uses this snapshot
+    // instead of the live board.chess.history(), so the user is free
+    // to explore post-game variations on the live board without
+    // contaminating what gets saved to the archive. "Gospel" stays
+    // gospel.
+    try {
+      board._archiveSnapshot = {
+        history: board.chess.history({ verbose: true }),
+        startingFen: board.startingFen,
+        fen: board.chess.fen(),
+        pgn: board.chess.pgn ? board.chess.pgn() : null,
+      };
+    } catch (err) {
+      console.warn('[practice] archive snapshot failed', err);
+      board._archiveSnapshot = null;
+    }
     // Stop any in-flight engine search AND invalidate its token so if
     // a bestmove fires after `stop` (as Stockfish does — it emits the
     // best move found so far) the listener bails rather than playing
@@ -8731,11 +8754,14 @@ async function main() {
           for (const l of lines) if (l.ucis[i] !== first) break outer;
           common++;
         }
-        // If only one line, the "common prefix" equals the whole line;
-        // back off by one so we still show the final move in the table.
-        if (lines.length === 1 && common === lines[0].ucis.length) {
-          common = Math.max(0, common - 1);
-        }
+        // Cap common at minLen - 1 so the shortest line ALWAYS has at
+        // least one move to show in the table. Without this, when one
+        // line is a prefix of another (e.g. one deviation recorded at
+        // ply 7, another at ply 9 that passed through ply 7), common
+        // = 7 and the shorter line has zero moves to display — its
+        // column is all blanks. Capping preserves the final move of
+        // every line in its column. Also handles the single-line case.
+        if (common >= minLen) common = Math.max(0, minLen - 1);
 
         const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
         // Walk common prefix to collect its SANs + divergence FEN.
