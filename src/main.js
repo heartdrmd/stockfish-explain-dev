@@ -3373,9 +3373,9 @@ async function main() {
                   // style picker. Style bias only applies AFTER the
                   // variation window is exhausted.
                   if (useVariation && variationFork) {
-                    let picked = null;
+                    let result = null;
                     try {
-                      picked = await OpeningVariation.pickCandidate(
+                      result = await OpeningVariation.pickCandidate(
                         ev.detail.topMoves || [],
                         fen,
                         variationFork,
@@ -3383,9 +3383,17 @@ async function main() {
                     } catch (err) {
                       console.warn('[variation] pickCandidate failed; falling back to best', err);
                     }
-                    const finalUci = picked || ev.detail.best;
-                    try { await OpeningVariation.recordPlay(fen, finalUci); } catch {}
-                    console.log('[practice] engine plays (variation fork', variationFork.forkIndex + ')', finalUci);
+                    const finalUci = (result && result.uci) || ev.detail.best;
+                    const didDeviate = !!(result && result.deviated);
+                    // If this was an actual deviation (non-#1 pick),
+                    // increment the deviation counter so the caller's
+                    // isActive() check retires the window once the
+                    // maxDeviations cap is hit.
+                    if (didDeviate) {
+                      try { OpeningVariation.noteDeviation(); } catch {}
+                      try { await OpeningVariation.recordPlay(fen, finalUci); } catch {}
+                    }
+                    console.log('[practice] engine plays (variation fork', variationFork.forkIndex + (didDeviate ? ', DEVIATED' : ', best') + ')', finalUci);
                     board.playEngineMove(finalUci);
                   } else {
                     // Style-bias: pick from the engine's top candidates
@@ -8307,6 +8315,8 @@ async function main() {
     const inEnabled   = $('vs-enabled');
     const inForks     = $('vs-max-forks');
     const inForksVal  = $('vs-max-forks-val');
+    const inDevs      = $('vs-max-deviations');
+    const inDevsVal   = $('vs-max-deviations-val');
     const inThink     = $('vs-think-ms');
     const inThinkVal  = $('vs-think-ms-val');
     const inEarly     = $('vs-early-tol');
@@ -8328,6 +8338,7 @@ async function main() {
       const s = OpeningVariation.getSettings();
       inEnabled.checked = !!s.enabled;
       inForks.value     = s.maxForks;     inForksVal.textContent = s.maxForks;
+      inDevs.value      = s.maxDeviations; inDevsVal.textContent  = s.maxDeviations;
       inThink.value     = Math.round(s.thinkMs / 1000);  inThinkVal.textContent = Math.round(s.thinkMs / 1000);
       inEarly.value     = s.earlyTolerance;  inEarlyVal.textContent = s.earlyTolerance;
       inTighten.checked = !!s.tighten;
@@ -8355,6 +8366,7 @@ async function main() {
       return {
         enabled:        inEnabled.checked,
         maxForks:       +inForks.value,
+        maxDeviations:  +inDevs.value,
         thinkMs:        (+inThink.value) * 1000,
         earlyTolerance: +inEarly.value,
         tighten:        inTighten.checked,
@@ -8369,12 +8381,13 @@ async function main() {
       if (!summary) return;
       const s = OpeningVariation.getSettings();
       if (!s.enabled) { summary.textContent = 'Opening variation: off'; return; }
-      summary.textContent = `Opening variation: ${s.maxForks} forks · ${s.earlyTolerance}${s.tighten ? '→' + s.lateTolerance : ''} cp · ${Math.round(s.thinkMs/1000)}s · ${s.devWeight}`;
+      summary.textContent = `Opening variation: ${s.maxForks} forks / ${s.maxDeviations} devs · ${s.earlyTolerance}${s.tighten ? '→' + s.lateTolerance : ''} cp · ${Math.round(s.thinkMs/1000)}s · ${s.devWeight}`;
     }
     refreshSummaryChip();
 
     // Live-value updates on slider input
     inForks.addEventListener('input', () => inForksVal.textContent = inForks.value);
+    inDevs .addEventListener('input', () => inDevsVal.textContent  = inDevs.value);
     inThink.addEventListener('input', () => inThinkVal.textContent = inThink.value);
     inEarly.addEventListener('input', () => inEarlyVal.textContent = inEarly.value);
     inLate .addEventListener('input', () => inLateVal.textContent  = inLate.value);

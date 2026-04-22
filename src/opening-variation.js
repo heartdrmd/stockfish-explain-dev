@@ -36,7 +36,8 @@ const LS_MEMORY_KEY   = 'stockfish-explain.variation-memory'; // guest fallback
 
 const DEFAULTS = Object.freeze({
   enabled:         false,
-  maxForks:        5,           // 1..15
+  maxForks:        5,           // 1..15 — opportunity window (engine moves considered)
+  maxDeviations:   3,           // 1..15 — hard cap on actual non-#1 picks
   thinkMs:         30_000,      // 15s..120s
   earlyTolerance:  50,          // 10..100 cp
   tighten:         true,
@@ -94,10 +95,12 @@ let _session = null;
 export function startSession(openingName, openingEco) {
   const s = getSettings();
   _session = {
-    active:      !!s.enabled,
-    forkIndex:   0,       // how many forks already consumed
-    maxForks:    Math.min(Math.max(1, +s.maxForks || 1), 15),
-    thinkMs:     Math.min(Math.max(5_000, +s.thinkMs || 30_000), 120_000),
+    active:          !!s.enabled,
+    forkIndex:       0,   // how many engine-move opportunities consumed
+    deviationsUsed:  0,   // how many of those ended in actual non-#1 pick
+    maxForks:        Math.min(Math.max(1, +s.maxForks || 1), 15),
+    maxDeviations:   Math.min(Math.max(1, +s.maxDeviations || 3), 15),
+    thinkMs:         Math.min(Math.max(5_000, +s.thinkMs || 30_000), 120_000),
     earlyTol:    Math.min(Math.max(5, +s.earlyTolerance || 50), 200),
     lateTol:     s.tighten ? Math.min(Math.max(3, +s.lateTolerance || 10), 100) : null,
     devCurve:    DEV_WEIGHT_CURVE[s.devWeight] || DEV_WEIGHT_CURVE.strong,
@@ -112,7 +115,17 @@ export function startSession(openingName, openingEco) {
 export function endSession() { _session = null; }
 
 export function isActive() {
-  return !!(_session && _session.active && _session.forkIndex < _session.maxForks);
+  if (!_session || !_session.active) return false;
+  if (_session.forkIndex >= _session.maxForks) return false;
+  if (_session.deviationsUsed >= _session.maxDeviations) return false;
+  return true;
+}
+
+// Called by main.js after pickCandidate returns an actual deviation
+// (picked a non-#1 candidate). Bumps the deviation counter; when it
+// reaches maxDeviations, isActive() returns false on subsequent forks.
+export function noteDeviation() {
+  if (_session) _session.deviationsUsed++;
 }
 
 // Consume one fork and return the per-fork parameters. Call this
@@ -259,6 +272,10 @@ export async function openingReport(openingName) {
 // in centipawns. Higher = better for STM. We compare best - other as
 // "how much worse is `other` than best (in cp)".
 
+// Returns { uci, deviated } — deviated=true when the pick is a non-#1
+// candidate. Caller uses `deviated` to increment the session's
+// deviation counter (noteDeviation()). On any early-exit (no tail,
+// singleton, don't-deviate roll) returns { uci, deviated: false }.
 export async function pickCandidate(topMoves, fen, forkParams) {
   if (!Array.isArray(topMoves) || topMoves.length === 0) return null;
   const best = topMoves[0];
@@ -276,13 +293,13 @@ export async function pickCandidate(topMoves, fen, forkParams) {
     const gap = best.score - t.score;
     if (gap <= forkParams.tolerance) cands.push({ uci: t.pv[0], gap });
   }
-  if (cands.length === 0) return best.pv[0];
-  if (cands.length === 1) return cands[0].uci;
+  if (cands.length === 0) return { uci: best.pv[0], deviated: false };
+  if (cands.length === 1) return { uci: cands[0].uci, deviated: false };
 
   // Decide: deviate or not?
   const rollDeviate = Math.random() < forkParams.devProb;
   if (!rollDeviate) {
-    return cands[0].uci;   // always pick #1 when not deviating
+    return { uci: cands[0].uci, deviated: false };   // always pick #1 when not deviating
   }
 
   // Deviating: weighted pick from the NON-#1 pool (fall back to #1 if
@@ -310,7 +327,7 @@ export async function pickCandidate(topMoves, fen, forkParams) {
   let roll = Math.random() * sum;
   for (let i = 0; i < tail.length; i++) {
     roll -= weights[i];
-    if (roll <= 0) return tail[i].uci;
+    if (roll <= 0) return { uci: tail[i].uci, deviated: true };
   }
-  return tail[tail.length - 1].uci;
+  return { uci: tail[tail.length - 1].uci, deviated: true };
 }

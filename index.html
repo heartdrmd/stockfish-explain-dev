@@ -1275,11 +1275,18 @@
       <section class="vs-section">
         <h4 class="vs-h">📏 Range</h4>
         <div class="vs-row">
-          <label for="vs-max-forks">Vary for first&nbsp;</label>
+          <label for="vs-max-forks">Vary-opportunity window: first&nbsp;</label>
           <input type="range" id="vs-max-forks" min="1" max="15" step="1">
           <span id="vs-max-forks-val" class="vs-val">5</span>
-          <span class="muted">forks</span>
+          <span class="muted">engine moves</span>
         </div>
+        <div class="vs-row">
+          <label for="vs-max-deviations">Max actual deviations&nbsp;</label>
+          <input type="range" id="vs-max-deviations" min="1" max="15" step="1">
+          <span id="vs-max-deviations-val" class="vs-val">3</span>
+          <span class="muted">non-#1 picks</span>
+        </div>
+        <small class="muted" style="display:block;margin-left:4px;">Variation stops at whichever comes first: the engine has played its N<sup>th</sup> opportunity, OR M actual non-#1 picks have occurred.</small>
         <div class="vs-row">
           <label for="vs-think-ms">Think time per fork&nbsp;</label>
           <input type="range" id="vs-think-ms" min="15" max="120" step="5">
