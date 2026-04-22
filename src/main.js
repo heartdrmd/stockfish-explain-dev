@@ -3414,6 +3414,7 @@ async function main() {
                     }
                     const finalUci = (result && result.uci) || ev.detail.best;
                     const didDeviate = !!(result && result.deviated);
+                    const wasForced  = !!(result && result.forced);
                     // If this was an actual deviation (non-#1 pick),
                     // increment the deviation counter so the caller's
                     // isActive() check retires the window once the
@@ -3430,7 +3431,8 @@ async function main() {
                         await OpeningVariation.recordPlay(fen, finalUci, prefixMoves);
                       } catch {}
                     }
-                    console.log('[practice] engine plays (variation fork', variationFork.forkIndex + (didDeviate ? ', DEVIATED' : ', best') + ')', finalUci);
+                    const tag = didDeviate ? 'DEVIATED' : (wasForced ? 'FORCED (fork refunded)' : 'best');
+                    console.log('[practice] engine plays (variation fork', variationFork.forkIndex + ', ' + tag + ')', finalUci);
                     board.playEngineMove(finalUci);
                   } else {
                     // Style-bias: pick from the engine's top candidates

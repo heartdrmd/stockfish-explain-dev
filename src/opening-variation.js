@@ -390,12 +390,23 @@ export async function pickCandidate(topMoves, fen, forkParams) {
     if (gap <= forkParams.tolerance) cands.push({ uci: t.pv[0], gap });
   }
   if (cands.length === 0) {
-    console.log('[variation] pickCandidate: no candidates within tolerance; playing #1', { best: best.pv[0] });
-    return { uci: best.pv[0], deviated: false };
+    // Refund the fork: nothing was deviation-worthy at this position.
+    if (_session && _session.forkIndex > 0) _session.forkIndex--;
+    console.log('[variation] pickCandidate: no candidates within tolerance; playing #1, refunding fork', {
+      best: best.pv[0], forkIndexNow: _session?.forkIndex,
+    });
+    return { uci: best.pv[0], deviated: false, forced: true };
   }
   if (cands.length === 1) {
-    console.log('[variation] pickCandidate: only 1 candidate within tolerance; no deviation possible', { uci: cands[0].uci });
-    return { uci: cands[0].uci, deviated: false };
+    // Forced position: only one sound move within tolerance (the best).
+    // Don't burn a fork on this — refund the counter so the user's
+    // deviation budget stays available for real decision points later
+    // in the opening window. User-requested behaviour.
+    if (_session && _session.forkIndex > 0) _session.forkIndex--;
+    console.log('[variation] pickCandidate: FORCED (only 1 candidate within tolerance); refunded fork', {
+      uci: cands[0].uci, forkIndexNow: _session?.forkIndex,
+    });
+    return { uci: cands[0].uci, deviated: false, forced: true };
   }
 
   // Decide: deviate or not?
