@@ -8420,6 +8420,185 @@ async function main() {
     });
   })();
 
+  // ─── 📊 Variation Report modal — tree of plays per opening ────────
+  // Reads from opening-variation.js's Postgres-or-localStorage backend,
+  // renders a sorted list of (fen, uci, times_played, last_played), with
+  // a background probe to annotate each with its Stockfish eval.
+  (() => {
+    const modal      = document.getElementById('variation-report-modal');
+    if (!modal) return;
+    const nameEl     = modal.querySelector('#vr-opening-name');
+    const statsEl    = modal.querySelector('#vr-stats');
+    const treeEl     = modal.querySelector('#vr-tree');
+    const btnClose   = modal.querySelector('#vr-close');
+    const btnPGN     = modal.querySelector('#vr-download-pgn');
+    const btnReset   = modal.querySelector('#vr-reset');
+
+    let _currentOpening = null;
+    let _currentEntries = [];
+
+    function close() { modal.hidden = true; }
+    btnClose.addEventListener('click', close);
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+
+    // Build a move string from a UCI by replaying from `fen`, so we can
+    // show "3.Nf3" rather than the bare UCI "g1f3".
+    function uciToSan(fen, uci) {
+      try {
+        const c = new Chess(fen);
+        const m = c.move({ from: uci.slice(0,2), to: uci.slice(2,4), promotion: uci.length > 4 ? uci[4] : undefined });
+        return m ? m.san : uci;
+      } catch { return uci; }
+    }
+    function plyNumberFromFen(fen) {
+      // Convert fullmove + side-to-move → ply number (1-indexed).
+      try {
+        const parts = fen.split(' ');
+        const fullmove = +parts[5] || 1;
+        const stm = parts[1] || 'w';
+        return stm === 'w' ? (fullmove * 2 - 1) : (fullmove * 2);
+      } catch { return 1; }
+    }
+    function fmtRelDate(iso) {
+      if (!iso) return '—';
+      try {
+        const then = new Date(iso).getTime();
+        const days = Math.floor((Date.now() - then) / 86400000);
+        if (days === 0) return 'today';
+        if (days === 1) return 'yesterday';
+        if (days <  7)  return `${days}d ago`;
+        if (days < 30)  return `${Math.floor(days/7)}w ago`;
+        return `${Math.floor(days/30)}mo ago`;
+      } catch { return '—'; }
+    }
+    function fmtEval(cpWhite, mate) {
+      if (mate != null) return `#${mate}`;
+      if (cpWhite == null) return '—';
+      const v = cpWhite / 100;
+      return (v >= 0 ? '+' : '') + v.toFixed(2);
+    }
+
+    function render() {
+      if (!_currentEntries.length) {
+        treeEl.innerHTML = '<div class="vr-empty">No variation plays recorded for this opening yet. Enable variation mode and practice a few games.</div>';
+        statsEl.textContent = '';
+        return;
+      }
+      const totalPlays = _currentEntries.reduce((s, e) => s + (e.times_played || 1), 0);
+      statsEl.textContent = `${_currentEntries.length} distinct line${_currentEntries.length === 1 ? '' : 's'} · ${totalPlays} total plays`;
+
+      const rows = _currentEntries.map(e => {
+        const san = uciToSan(e.fen, e.uci);
+        const ply = plyNumberFromFen(e.fen);
+        const full = Math.ceil(ply / 2);
+        const moveNum = (ply % 2 === 1) ? `${full}.` : `${full}…`;
+        const cached = fenEvalCache.get(e.fen) || {};
+        return `<div class="vr-line" data-fen="${escHtml(e.fen)}" data-uci="${escHtml(e.uci)}">
+          <span class="vr-moves">${moveNum} <b>${escHtml(san)}</b></span>
+          <span class="vr-count">${e.times_played || 1}×</span>
+          <span class="vr-eval" data-fen="${escHtml(e.fen)}">${fmtEval(cached.cpWhite, cached.mate)}</span>
+          <span class="vr-date">${fmtRelDate(e.last_played)}</span>
+        </div>`;
+      });
+      treeEl.innerHTML = rows.join('');
+
+      // Wire clicks: load position on the board.
+      treeEl.querySelectorAll('.vr-line').forEach(el => {
+        el.addEventListener('click', () => {
+          const fen = el.dataset.fen;
+          try {
+            board.chess.load(fen);
+            board.startingFen = fen;
+            board.tree = new (board.tree.constructor)(fen);
+            board.cg.set({ fen, turnColor: board.chess.turn() === 'w' ? 'white' : 'black' });
+            board.dispatchEvent(new CustomEvent('new-game'));
+            close();
+          } catch (err) {
+            alert('Could not load position: ' + err.message);
+          }
+        });
+      });
+    }
+
+    async function probeEvalsInBackground() {
+      // Fill in Stockfish evals for any lines we don't have cached.
+      // Runs sequentially at depth 14 so the report populates as
+      // positions get evaluated. User sees '—' until each probe fires.
+      for (const e of _currentEntries) {
+        if (fenEvalCache.has(e.fen)) continue;
+        try {
+          await AICoach.probeEngine(engine, e.fen, 14, 1, 0);
+          // Update the row in place if the modal is still open.
+          if (modal.hidden) return;
+          const row = treeEl.querySelector(`.vr-eval[data-fen="${CSS.escape(e.fen)}"]`);
+          if (row) {
+            const cached = fenEvalCache.get(e.fen) || {};
+            row.textContent = fmtEval(cached.cpWhite, cached.mate);
+          }
+        } catch (err) {
+          console.warn('[vr] probe failed', e.fen, err);
+        }
+      }
+    }
+
+    async function open(openingName) {
+      if (!openingName) {
+        alert('Start a practice game with an opening first, then come back to view its report.');
+        return;
+      }
+      _currentOpening = openingName;
+      nameEl.textContent = openingName + (window.__practiceLastOpEco ? ` · ${window.__practiceLastOpEco}` : '');
+      modal.hidden = false;
+      treeEl.innerHTML = '<div class="vr-empty">Loading…</div>';
+      statsEl.textContent = '';
+      try {
+        _currentEntries = await OpeningVariation.openingReport(openingName);
+      } catch (err) {
+        treeEl.innerHTML = `<div class="vr-empty">Load failed: ${escHtml(err.message || String(err))}</div>`;
+        return;
+      }
+      render();
+      // Kick off eval probes (fire-and-forget).
+      probeEvalsInBackground();
+    }
+    window.__openVariationReport = open;
+
+    // PGN export — one mainline "game" per distinct line played, with
+    // the opening's starting moves prefixed (if we can reconstruct).
+    btnPGN.addEventListener('click', () => {
+      if (!_currentEntries.length) { alert('Nothing to export.'); return; }
+      const lines = _currentEntries.map(e => {
+        const san = uciToSan(e.fen, e.uci);
+        const ply = plyNumberFromFen(e.fen);
+        const full = Math.ceil(ply / 2);
+        const prefix = (ply % 2 === 1) ? `${full}.` : `${full}...`;
+        const cached = fenEvalCache.get(e.fen) || {};
+        const evalStr = fmtEval(cached.cpWhite, cached.mate);
+        return `[Event "${_currentOpening} variation"]\n[FEN "${e.fen}"]\n[Result "*"]\n[VariationPlayed "${e.times_played}×"]\n[LastPlayed "${e.last_played || '?'}"]\n[Eval "${evalStr}"]\n\n${prefix} ${san} *\n`;
+      }).join('\n\n');
+      const blob = new Blob([lines], { type: 'application/x-chess-pgn' });
+      const url  = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${(_currentOpening || 'variations').replace(/[^\w-]+/g, '_')}-variations.pgn`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    // Reset from inside the report modal (same confirm-gate).
+    btnReset.addEventListener('click', async () => {
+      if (!_currentOpening) return;
+      if (!confirm(`Forget all ${_currentEntries.length} variation${_currentEntries.length === 1 ? '' : 's'} played in "${_currentOpening}"? You'll start fresh next time.`)) return;
+      try {
+        await OpeningVariation.resetOpeningMemory(_currentOpening);
+        _currentEntries = [];
+        render();
+      } catch (err) {
+        alert('Reset failed: ' + (err.message || err));
+      }
+    });
+  })();
+
   // ─── Reset data (🗑) — wipes local mistakes/drills and optionally ─
   //      deletes all cloud games. Destructive, so confirmation modal
   //      lets the user opt-in to each bucket independently.
