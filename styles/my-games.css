@@ -1,0 +1,952 @@
+/* my-games.css — styles for the 📚 My Games full-page tab + live eval
+   graph card + per-side stats panel. Visual language inspired by the
+   Lichess analysis page (split-fill eval graph, crisp accuracy
+   breakdown) but written from scratch — no CSS copied from lila. */
+
+/* ─── Opening Explorer card (floating) ───────────────────────────── */
+.explorer-card {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  max-height: 70vh;
+  z-index: 500;
+  background: rgba(20, 20, 22, 0.96);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.55);
+  backdrop-filter: blur(6px);
+  display: flex;
+  flex-direction: column;
+}
+.explorer-card[hidden] { display: none; }
+.explorer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.explorer-body { overflow-y: auto; flex: 1; min-height: 200px; }
+
+.exp-tabs {
+  display: flex;
+  gap: 2px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.04);
+  padding: 2px;
+  margin-bottom: 8px;
+}
+.exp-tab {
+  flex: 1;
+  padding: 5px 8px;
+  background: transparent;
+  border: 0;
+  color: rgba(255,255,255,0.6);
+  font-size: 11px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.exp-tab:hover { background: rgba(255,255,255,0.08); color: #fff; }
+.exp-tab-active {
+  background: #1976d2;
+  color: #fff;
+}
+.exp-refresh {
+  padding: 5px 10px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 4px;
+  color: #bbb;
+  cursor: pointer;
+  font-size: 13px;
+}
+.exp-refresh:hover { color: #fff; background: rgba(255,255,255,0.1); }
+
+.exp-empty, .exp-loading { padding: 24px 12px; text-align: center; color: rgba(255,255,255,0.5); font-size: 12px; }
+
+.exp-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.exp-row {
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.exp-row:hover td { background: rgba(33,150,243,0.12); }
+.exp-row td { padding: 5px 6px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.exp-san { font-weight: 700; min-width: 54px; font-family: var(--font-mono, ui-monospace, monospace); }
+.exp-count { text-align: right; color: rgba(255,255,255,0.6); min-width: 60px; font-family: var(--font-mono, ui-monospace, monospace); }
+.exp-bar { width: 100%; position: relative; }
+.exp-bar-inner {
+  display: flex;
+  height: 14px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.04);
+}
+.exp-w { background: #f0f0eb; }
+.exp-d { background: #888; }
+.exp-b { background: #0c0c0e; }
+.exp-pct { font-size: 9px; opacity: 0.55; display: block; margin-top: 2px; font-family: var(--font-mono, ui-monospace, monospace); }
+.exp-total { font-size: 10px; color: rgba(255,255,255,0.45); text-align: center; padding: 8px 0; }
+
+.exp-top-games { margin-top: 10px; }
+.exp-sub { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255,255,255,0.5); margin-bottom: 4px; }
+.exp-top-games ul { list-style: none; margin: 0; padding: 0; font-size: 11px; }
+.exp-top-games li { padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.exp-top-games em { font-style: normal; color: #ffb74d; margin: 0 6px; }
+.exp-year { float: right; opacity: 0.5; font-size: 10px; }
+
+.exp-tb-verdict {
+  font-weight: 700;
+  text-align: center;
+  padding: 6px 0 10px;
+  font-size: 13px;
+  color: #4ec9b0;
+}
+.exp-tb-win  td { background: rgba(76,175,80,0.08); }
+.exp-tb-loss td { background: rgba(244,67,54,0.08); }
+.exp-tb-cat { text-transform: capitalize; color: rgba(255,255,255,0.7); }
+.exp-tb-dtm { font-family: var(--font-mono, ui-monospace, monospace); color: rgba(255,255,255,0.55); }
+
+/* ─── My Games quick-switch picker ───────────────────────────────── */
+.mg-quickpick {
+  /* Centred in the viewport per user feedback. Tall enough to show ~8
+     games before scrolling. */
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  max-height: 70vh;
+  z-index: 480;
+  background: rgba(20, 20, 22, 0.96);
+  border: 1px solid rgba(33,150,243,0.4);
+  border-radius: 10px;
+  padding: 12px 14px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+  backdrop-filter: blur(8px);
+  display: flex;
+  flex-direction: column;
+}
+.mg-quickpick[hidden] { display: none; }
+.mg-quickpick-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.mg-quickpick-head strong { flex: 1; }
+.mg-quickpick-list {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 160px;
+}
+.mgq-row {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.1s;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.mgq-row:hover { background: rgba(33,150,243,0.12); }
+.mgq-row-selected { background: rgba(33,150,243,0.2); }
+.mgq-res {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; color: #fff;
+  flex-shrink: 0;
+}
+.mgq-res.w { background: #4caf50; }
+.mgq-res.l { background: #f44336; }
+.mgq-res.d { background: #ffc107; color: #222; }
+.mgq-res.x { background: #777; }
+.mgq-main { font-size: 12px; min-width: 0; overflow: hidden; }
+.mgq-opening { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mgq-meta { font-size: 10px; color: rgba(255,255,255,0.5); }
+.mgq-date { font-size: 10px; color: rgba(255,255,255,0.4); font-family: var(--font-mono, ui-monospace, monospace); }
+
+/* ─── Practice coach chip (floating near the board) ──────────────── */
+.coach-chip {
+  position: fixed;
+  top: 120px;
+  right: 16px;
+  z-index: 600;
+  padding: 10px 16px;
+  border-radius: 24px;
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+  pointer-events: none;
+  transform: translateY(-12px);
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.2s;
+}
+.coach-chip.visible { opacity: 1; transform: translateY(0); }
+.coach-chip-best       { background: #2e7d32; color: #fff; border: 1px solid #1b5e20; }
+.coach-chip-good       { background: #43a047; color: #fff; border: 1px solid #2e7d32; }
+.coach-chip-ok         { background: #616161; color: #fff; border: 1px solid #424242; }
+.coach-chip-inaccuracy { background: #1976d2; color: #fff; border: 1px solid #1565c0; }
+.coach-chip-mistake    { background: #f57c00; color: #fff; border: 1px solid #e65100; }
+.coach-chip-blunder    { background: #c62828; color: #fff; border: 1px solid #8e0000; }
+
+.btn-coach-on { background: rgba(33,150,243,0.25); border-color: #1976d2; }
+
+/* ─── Opening Wiki card (floating) ──────────────────────────────── */
+.wiki-card {
+  position: fixed;
+  top: 80px;
+  right: 16px;
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  max-height: 70vh;
+  z-index: 490;
+  background: rgba(20, 20, 22, 0.96);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.55);
+  display: flex;
+  flex-direction: column;
+}
+.wiki-card[hidden] { display: none; }
+.wiki-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.wiki-body {
+  overflow-y: auto;
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #e0e0e0;
+}
+.wiki-body h2, .wiki-body h3 {
+  font-size: 13px;
+  margin: 10px 0 4px;
+  color: #fff;
+}
+.wiki-body p { margin: 6px 0; }
+.wiki-body a { color: #64b5f6; text-decoration: none; }
+.wiki-body a:hover { text-decoration: underline; }
+.wiki-body ul, .wiki-body ol { padding-left: 20px; }
+.wiki-empty { padding: 24px 8px; text-align: center; color: rgba(255,255,255,0.5); }
+
+/* ─── Keyboard help overlay (? to toggle) ─────────────────────────── */
+#kbd-help {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  backdrop-filter: blur(4px);
+}
+.kbd-help-card {
+  background: #1a1a1c;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 10px;
+  padding: 24px 32px;
+  color: #e6e6e6;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  max-width: 520px;
+}
+.kbd-help-card h3 { margin: 0 0 16px; font-size: 16px; }
+.kbd-help-grid {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 6px 10px;
+  align-items: center;
+  font-size: 13px;
+}
+.kbd-help-grid kbd {
+  background: #2a2a2d;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  min-width: 14px;
+  display: inline-block;
+  text-align: center;
+}
+.kbd-help-footer {
+  margin-top: 14px;
+  font-size: 11px;
+  text-align: center;
+  opacity: 0.6;
+}
+
+/* ─── Site footer (AGPL-3.0 source-code notice) ──────────────────── */
+.site-footer {
+  padding: 10px 16px;
+  text-align: center;
+  font-size: 11px;
+  color: rgba(255,255,255,0.45);
+  border-top: 1px solid rgba(255,255,255,0.05);
+  background: rgba(0,0,0,0.2);
+}
+.site-footer a {
+  color: rgba(122,167,255,0.9);
+  text-decoration: none;
+}
+.site-footer a:hover { color: #fff; text-decoration: underline; }
+
+/* ─── Blue header button ────────────────────────────────────────── */
+.btn-my-games {
+  background: linear-gradient(180deg, #2196f3 0%, #1976d2 100%);
+  border: 1px solid #1565c0;
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.15);
+}
+.btn-my-games:hover {
+  background: linear-gradient(180deg, #42a5f5 0%, #1e88e5 100%);
+  border-color: #1976d2;
+}
+.btn-my-games:active {
+  background: linear-gradient(180deg, #1e88e5 0%, #1565c0 100%);
+}
+
+/* ─── Full-page tab ─────────────────────────────────────────────── */
+.mg-tab {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: var(--c-bg, #1e1e1e);
+  color: var(--c-font, #e6e6e6);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.mg-tab[hidden] { display: none; }
+
+.mg-topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--c-border, rgba(255,255,255,0.08));
+  background: rgba(255,255,255,0.02);
+  flex-wrap: wrap;
+}
+.mg-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.mg-stats-strip {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  flex-wrap: wrap;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+.mg-stat {
+  padding: 4px 10px;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.mg-stat-w { color: #4caf50; border-color: rgba(76,175,80,0.35); }
+.mg-stat-d { color: #ffc107; border-color: rgba(255,193,7,0.35); }
+.mg-stat-l { color: #f44336; border-color: rgba(244,67,54,0.35); }
+.mg-top-actions { display: flex; gap: 8px; }
+
+/* Big blue centered Close button — prominent so the user always knows
+   how to get back to the board. */
+.mg-close-big {
+  position: absolute;
+  left: 50%;
+  top: 8px;
+  transform: translateX(-50%);
+  background: linear-gradient(180deg, #2196f3 0%, #1976d2 100%);
+  color: #fff;
+  border: 1px solid #1565c0;
+  padding: 8px 22px;
+  font-size: 14px;
+  font-weight: 700;
+  border-radius: 6px;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.15);
+  letter-spacing: 0.02em;
+  z-index: 1;
+  transition: all 0.15s;
+}
+.mg-close-big:hover {
+  background: linear-gradient(180deg, #42a5f5 0%, #1e88e5 100%);
+  transform: translateX(-50%) translateY(-1px);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.2);
+}
+.mg-topbar { position: relative; }
+
+/* Prominent blue Learn-from-mistakes button inside the detail pane. */
+.btn-learn-mistakes {
+  background: linear-gradient(180deg, #2196f3 0%, #1976d2 100%);
+  border: 1px solid #1565c0;
+  color: #fff;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 6px 12px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.15);
+}
+.btn-learn-mistakes:hover {
+  background: linear-gradient(180deg, #42a5f5 0%, #1e88e5 100%);
+}
+/* Verifying state — grayed out, non-clickable, subtle pulse so the
+   user knows the system is working on something. Flips back to the
+   blue gradient when verification completes. */
+.btn-learn-mistakes.verifying,
+.btn-learn-mistakes.verifying:hover {
+  background: linear-gradient(180deg, #555 0%, #3a3a3a 100%);
+  border-color: #2a2a2a;
+  color: rgba(255,255,255,0.65);
+  cursor: wait;
+  animation: learn-verifying-pulse 1.6s ease-in-out infinite;
+}
+@keyframes learn-verifying-pulse {
+  0%, 100% { opacity: 0.75; }
+  50%      { opacity: 1; }
+}
+
+.mg-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 240px 1fr 420px;
+  min-height: 0;
+}
+@media (max-width: 1100px) {
+  .mg-body { grid-template-columns: 200px 1fr; }
+  .mg-detail { display: none; }
+  .mg-tab.mg-detail-open .mg-body { grid-template-columns: 1fr; }
+  .mg-tab.mg-detail-open .mg-filters,
+  .mg-tab.mg-detail-open .mg-main { display: none; }
+  .mg-tab.mg-detail-open .mg-detail { display: flex !important; }
+}
+
+/* ─── Filter sidebar ────────────────────────────────────────────── */
+.mg-filters {
+  border-right: 1px solid var(--c-border, rgba(255,255,255,0.08));
+  padding: 14px;
+  overflow-y: auto;
+  background: rgba(255,255,255,0.015);
+}
+.mg-filter-group { margin-bottom: 16px; }
+.mg-filter-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-font-dim, rgba(255,255,255,0.55));
+  margin-bottom: 6px;
+}
+.mg-quick-dates { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px; }
+.mg-chip {
+  padding: 3px 8px;
+  font-size: 11px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.03);
+  color: var(--c-font, #e6e6e6);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.mg-chip:hover { background: rgba(255,255,255,0.07); }
+.mg-chip-active {
+  background: #1976d2;
+  border-color: #1565c0;
+  color: #fff;
+}
+.mg-date-inputs {
+  display: flex;
+  gap: 6px;
+  flex-direction: column;
+  font-size: 11px;
+}
+.mg-date-inputs label { display: flex; flex-direction: column; gap: 2px; color: var(--c-font-dim, rgba(255,255,255,0.55)); }
+.mg-date-inputs input[type="date"] {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: var(--c-font, #e6e6e6);
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.mg-segmented {
+  display: flex;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+.mg-seg {
+  flex: 1;
+  padding: 5px 6px;
+  font-size: 11px;
+  background: rgba(255,255,255,0.03);
+  border: 0;
+  border-right: 1px solid rgba(255,255,255,0.08);
+  color: var(--c-font, #e6e6e6);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.mg-seg:last-child { border-right: 0; }
+.mg-seg:hover { background: rgba(255,255,255,0.08); }
+.mg-seg-active {
+  background: #1976d2;
+  color: #fff;
+}
+
+.mg-filters input[type="search"],
+.mg-filters select {
+  width: 100%;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: var(--c-font, #e6e6e6);
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+/* ─── Main list ─────────────────────────────────────────────────── */
+.mg-main {
+  overflow-y: auto;
+  padding: 8px 12px 40px;
+}
+.mg-list { display: flex; flex-direction: column; gap: 2px; }
+.mg-empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--c-font-dim, rgba(255,255,255,0.5));
+}
+
+.mg-row {
+  display: grid;
+  grid-template-columns: 28px 38px 1fr 76px 80px 76px auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.mg-row:hover { background: rgba(255,255,255,0.045); }
+.mg-row.mg-row-selected { background: rgba(33,150,243,0.12); }
+
+.mg-row-color {
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.15);
+}
+.mg-row-color.white { background: #fafafa; }
+.mg-row-color.black { background: #1a1a1a; }
+
+.mg-row-result {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px; height: 26px; border-radius: 50%;
+  font-weight: 700; font-size: 11px;
+  color: #fff;
+  flex-shrink: 0;
+}
+.mg-row-result.w { background: #4caf50; }
+.mg-row-result.l { background: #f44336; }
+.mg-row-result.d { background: #ffc107; color: #222; }
+.mg-row-result.x { background: #777; }
+
+.mg-row-main { min-width: 0; }
+.mg-row-opening {
+  font-weight: 600; font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mg-row-meta {
+  font-size: 11px; color: var(--c-font-dim, rgba(255,255,255,0.55));
+  display: flex; gap: 8px;
+  margin-top: 2px;
+}
+.mg-row-count {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--c-font-dim, rgba(255,255,255,0.55));
+  text-align: right;
+}
+.mg-row-mistakes {
+  display: flex; gap: 4px; justify-content: flex-end;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+.mg-row-chip {
+  padding: 1px 6px; border-radius: 8px;
+  background: rgba(255,255,255,0.06);
+}
+.mg-row-chip-m { background: rgba(220, 170, 80, 0.18); color: #dca650; }
+.mg-row-chip-b { background: rgba(244, 67, 54, 0.18);  color: #ff6e63; }
+.mg-row-date {
+  font-size: 11px; color: var(--c-font-dim, rgba(255,255,255,0.55));
+  text-align: right; white-space: nowrap;
+}
+.mg-row-actions {
+  display: flex; gap: 4px;
+}
+.mg-row-actions button {
+  font-size: 10px; padding: 3px 6px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: var(--c-font, #e6e6e6);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.mg-row-actions button:hover { background: rgba(255,255,255,0.1); }
+.mg-row-actions .mg-delete:hover {
+  background: rgba(244, 67, 54, 0.2);
+  border-color: #f44336;
+  color: #ff6e63;
+}
+
+.mg-list-footer {
+  margin-top: 16px;
+  text-align: center;
+}
+
+/* ─── Detail pane ───────────────────────────────────────────────── */
+.mg-detail {
+  border-left: 1px solid var(--c-border, rgba(255,255,255,0.08));
+  padding: 14px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: rgba(0,0,0,0.15);
+}
+.mg-detail-head {
+  display: flex; align-items: flex-start; gap: 10px;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.mg-detail-title { font-weight: 700; font-size: 14px; }
+.mg-detail-sub   { font-size: 11px; color: var(--c-font-dim, rgba(255,255,255,0.55)); margin-top: 2px; }
+.mg-detail-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.mg-delete:hover {
+  background: rgba(244, 67, 54, 0.15) !important;
+  border-color: #f44336 !important;
+  color: #ff6e63;
+}
+
+.mg-graph-wrap {
+  position: relative;
+  height: 200px;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 4px;
+  padding: 4px;
+}
+.mg-graph-wrap canvas { display: block; width: 100% !important; height: 100% !important; }
+
+.mg-stats-wrap {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+/* ─── Per-side stats panel (used in both mg-detail + live card) ─── */
+.gs-side {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 13px;
+}
+.gs-side-user { border-color: rgba(33,150,243,0.4); background: rgba(33,150,243,0.06); }
+.gs-head { font-size: 12px; margin-bottom: 8px; display: flex; gap: 6px; align-items: center; }
+.gs-dot  { font-size: 14px; }
+.gs-row  { display: flex; gap: 8px; padding: 2px 0; font-size: 12px; }
+.gs-n    { font-family: var(--font-mono, ui-monospace, monospace); font-weight: 700; min-width: 36px; text-align: right; }
+.gs-label { color: var(--c-font-dim, rgba(255,255,255,0.6)); }
+.gs-inacc .gs-n { color: #64b5f6; }
+.gs-mist  .gs-n { color: #ffb74d; }
+.gs-blun  .gs-n { color: #ff6e63; }
+
+/* Clickable mistake rows — hover state telegraphs the cycle
+   behaviour (Lichess-style). */
+.gs-clickable {
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 2px 4px;
+  margin: 0 -4px;
+  transition: background 0.12s;
+}
+.gs-clickable:hover {
+  background: rgba(33,150,243,0.12);
+}
+.gs-clickable .gs-label {
+  color: var(--c-font, #e6e6e6);
+}
+.gs-clickable::after {
+  content: '›';
+  margin-left: auto;
+  opacity: 0.35;
+  font-weight: 700;
+}
+.gs-clickable:hover::after { opacity: 1; }
+
+/* Reanalyze button — sits under the two side panels. */
+.gs-reanalyze-wrap {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.gs-reanalyze {
+  font-size: 11px;
+  padding: 5px 10px;
+  background: rgba(78,201,176,0.14);
+  border: 1px solid rgba(78,201,176,0.4);
+  color: #4ec9b0;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.gs-reanalyze:hover:not(:disabled) {
+  background: rgba(78,201,176,0.24);
+}
+.gs-reanalyze:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+.gs-reanalyze-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.gs-reanalyze-stop {
+  font-size: 11px;
+  padding: 5px 10px;
+  background: rgba(244,67,54,0.18);
+  border: 1px solid rgba(244,67,54,0.5);
+  color: #ff8b80;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.gs-reanalyze-stop:hover { background: rgba(244,67,54,0.3); }
+.gs-reanalyze-status {
+  font-size: 10px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--c-font-dim, rgba(255,255,255,0.5));
+}
+
+/* ─── Live eval graph card ───────────────────────────────────────── */
+/* Two modes:
+     .live-graph-card              — floating bottom-right, compact (analysis hint)
+     .live-graph-card.review-mode  — full-width dock at the bottom of the
+                                     viewport with a big graph + side-by-side
+                                     stats. Used after loading a game from
+                                     My Games (matches Lichess's computer-
+                                     analysis layout). */
+.live-graph-card {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  z-index: 500;
+  background: rgba(20, 20, 22, 0.96);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.55);
+  backdrop-filter: blur(6px);
+}
+/* Slot beneath the board where the review-mode card gets relocated. */
+.board-below-slot {
+  width: 100%;
+  margin-top: 10px;
+}
+.board-below-slot:empty { display: none; }
+
+/* Slot under the move notation on the right — review-mode stats panels
+   get moved here when a My Games game is loaded. */
+.notation-below-slot {
+  width: 100%;
+  margin-top: 8px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.notation-below-slot:empty { display: none; }
+.notation-below-slot .gs-side { font-size: 12px; padding: 8px 10px; margin-bottom: 6px; }
+.notation-below-slot .live-graph-cta { margin-top: 6px; }
+
+/* Keep enough room under the move list — at least ~8 rows of moves
+   visible, even when the review stats below are populated. */
+#move-list {
+  min-height: 220px;
+  flex: 1 1 220px;
+}
+
+/* Collapse toggle on stats panels so the notation can claim full
+   column height if the user wants it. Triggered by clicking the
+   stats-wrap header / the 🢃 button. */
+.notation-below-slot.collapsed {
+  max-height: 32px;
+  overflow: hidden;
+}
+.notation-stats-collapse {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.55);
+  padding: 4px 6px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.notation-stats-collapse:hover { color: #fff; }
+
+.live-graph-card.review-mode {
+  /* When docked inside .board-below-slot the card flows INLINE below
+     the board, full-width of the board column, no longer a floating
+     overlay. Our JS moves the card into that slot on review-mode
+     open and back to <body> on close. */
+  position: static;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  transform: none;
+  width: 100%;
+  max-width: 100%;
+  padding: 10px 14px 12px;
+  border-radius: 10px;
+  background: rgba(15, 15, 17, 0.985);
+  box-shadow: 0 -2px 12px rgba(0,0,0,0.3);
+}
+.live-graph-card.review-mode .live-graph-body {
+  /* Grows with the viewport — 20vh of screen height, clamped so it
+     doesn't dominate on tall displays or disappear on short ones. */
+  height: clamp(120px, 22vh, 240px);
+}
+.live-graph-movetime {
+  margin-top: 6px;
+  height: 0;
+  overflow: hidden;
+}
+.live-graph-movetime[hidden] { display: none; }
+.live-graph-card.review-mode .live-graph-movetime {
+  height: clamp(40px, 8vh, 90px);
+  display: block !important;
+}
+.live-graph-movetime canvas { width: 100% !important; height: 100% !important; display: block; }
+.live-graph-card.review-mode .live-graph-stats {
+  grid-template-columns: 1fr 1fr 200px;
+  gap: 10px;
+  margin-top: 8px;
+}
+.live-graph-card.review-mode .live-graph-stats .gs-side {
+  font-size: 12px;
+  padding: 10px 12px;
+}
+.live-graph-card.review-mode .live-graph-stats .gs-row { font-size: 12px; }
+.live-graph-card.review-mode .live-graph-stats .gs-row .gs-n { min-width: 42px; }
+.live-graph-card.review-mode .live-graph-head {
+  font-size: 13px;
+}
+/* Below a certain width, stack stats vertically under the graph. */
+@media (max-width: 900px) {
+  .live-graph-card.review-mode .live-graph-stats {
+    grid-template-columns: 1fr;
+  }
+  .live-graph-card.review-mode .live-graph-body { height: 180px; }
+}
+
+/* Review-mode Learn/Reanalyze call-to-action column. */
+.live-graph-cta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  justify-content: center;
+}
+.live-graph-cta .btn-learn-mistakes {
+  font-size: 13px;
+  padding: 10px 14px;
+}
+.live-graph-cta .gs-reanalyze {
+  font-size: 12px;
+  padding: 8px 12px;
+}
+.live-graph-card[hidden] { display: none; }
+
+/* Sidebar-docked graph (toggled from the 📈 button in the move-list
+   header). Card flows inline above the notation at the SAME width
+   as the move-list column — no floating overlay, no fixed width. */
+.live-graph-card.sidebar-docked {
+  position: static;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  transform: none;
+  width: 100%;
+  max-width: 100%;
+  margin-bottom: 6px;
+  padding: 8px 10px 10px;
+}
+.live-graph-card.sidebar-docked .live-graph-body {
+  height: clamp(100px, 18vh, 200px);
+}
+/* Slot beneath the move-list header where the docked graph lives. */
+.notation-graph-slot { width: 100%; }
+.notation-graph-slot:empty { display: none; }
+
+/* Highlight the nav-row graph button when the graph is visible. */
+#nav-graph.active {
+  background: var(--c-primary);
+  color: white;
+}
+.live-graph-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 12px; margin-bottom: 6px;
+}
+.btn-mini {
+  font-size: 11px; padding: 2px 6px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: var(--c-font, #e6e6e6);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.btn-mini:hover { background: rgba(255,255,255,0.1); }
+.live-graph-body {
+  position: relative;
+  height: 120px;
+}
+.live-graph-body canvas { display: block; width: 100% !important; height: 100% !important; }
+.live-graph-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+.live-graph-stats .gs-side { font-size: 11px; padding: 6px; }
+.live-graph-stats .gs-row  { font-size: 11px; }

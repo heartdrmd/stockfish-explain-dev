@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Stockfish.explain</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="styles/fonts.css">
+  <link rel="stylesheet" href="styles/theme.css">
+  <link rel="stylesheet" href="vendor/chessground/chessground.base.css">
+  <link rel="stylesheet" href="styles/board.css">
+  <link rel="stylesheet" href="styles/layout.css">
+  <link rel="stylesheet" href="styles/panels.css">
+  <link rel="stylesheet" href="styles/my-games.css">
+
+  <!-- Chart.js (MIT) — powers the Lichess-style eval graph. Loaded
+       from jsDelivr. Pinned to a specific version to avoid a surprise
+       API break. ~80 KB gzipped. -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.js" defer></script>
+
+  <!-- Preload the engine the user will actually boot — the inline
+       script runs synchronously BEFORE the HTML parser moves on to the
+       body, so the fetches start before anything else loads.
+       Reads the persisted flavor (localStorage) or falls back to lite.
+       fetchpriority=high nudges Chrome to prioritise these above
+       later script/css. crossorigin is required because the same
+       files are later fetched from a cross-origin-isolated worker;
+       without it the browser double-fetches. -->
+  <script>
+    (function preloadEngine() {
+      try {
+        var flavor = localStorage.getItem('stockfish-explain.engine-flavor') || 'lite';
+        // If a previously-saved flavor crashed boot, bootEngine will
+        // reset it to the default on next load; we still preload what
+        // it would actually try first.
+        var base = 'assets/stockfish/stockfish-';
+        var map = {
+          'lite':               '18-lite',
+          'lite-single':        '18-lite-single',
+          'full':               '18',
+          'stock-single':       'stock-single',
+          'kaufman':            'kaufman',             'kaufman-single':        'kaufman-single',         'kaufman-lite-single':        'kaufman-lite-single',
+          'classical':          'classical',           'classical-single':      'classical-single',       'classical-lite-single':      'classical-lite-single',
+          'alphazero':          'alphazero',           'alphazero-single':      'alphazero-single',       'alphazero-lite-single':      'alphazero-lite-single',
+          'avrukh':             'avrukh',              'avrukh-single':         'avrukh-single',          'avrukh-lite-single':         'avrukh-lite-single',
+          'avrukhplus':         'avrukhplus',          'avrukhplus-single':     'avrukhplus-single',      'avrukhplus-lite':            'avrukhplus-lite',   'avrukhplus-lite-single': 'avrukhplus-lite-single'
+        };
+        var name = map[flavor] || '18-lite';
+        var jsHref   = base + name + '.js';
+        var wasmHref = base + name + '.wasm';
+        function add(href, type) {
+          var link = document.createElement('link');
+          link.rel = 'preload';
+          link.as = 'fetch';
+          link.href = href;
+          link.crossOrigin = 'anonymous';
+          if (type) link.type = type;
+          link.setAttribute('fetchpriority', 'high');
+          document.head.appendChild(link);
+        }
+        add(jsHref);
+        add(wasmHref, 'application/wasm');
+      } catch (e) { /* localStorage blocked? just skip preload */ }
+    })();
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <h1 class="site-title">Stockfish<span class="accent">.explain</span></h1>
+
+    <!-- Prominent always-visible cluster: Toolbar toggle + quick New
+         game + quick Practice. Sit OUTSIDE .site-nav so they stay
+         reachable even when the nav collapses during a practice game. -->
+    <button id="btn-toggle-toolbar" class="btn btn-toggle-toolbar always-visible"
+            title="Show or hide the top toolbar — auto-hides during a practice game">⇕ Toolbar</button>
+    <button id="btn-quick-new" class="btn btn-quick-action always-visible"
+            title="Start a new game from the initial position">🆕 New game</button>
+    <button id="btn-quick-practice" class="btn btn-quick-action always-visible"
+            title="Open the practice modal to pick an opening and play the engine">🎯 Practice</button>
+    <button id="btn-my-games" class="btn btn-my-games always-visible"
+            title="Open the My Games tab — filter, replay, analyse, delete your saved games">📚 My Games</button>
+    <button id="btn-live-graph" class="btn always-visible"
+            title="Toggle the live evaluation graph. Hidden during practice by default (anti-cheat) but you can turn it on anytime.">📈 Graph</button>
+    <button id="btn-coach" class="btn always-visible"
+            title="Practice coach: after each move shows a brief 'Best / Good / Inaccuracy / Mistake / Blunder' chip (Lichess-style). Additive overlay — your normal practice flow stays exactly the same.">🎓 Coach</button>
+    <!-- Auth area — single slot that flips between 'Sign in' and 'Hi, user / Logout'. -->
+    <span id="auth-area" class="always-visible auth-area">
+      <button id="btn-signin"   class="btn btn-auth always-visible" title="Sign in to sync games across devices">👤 Sign in</button>
+      <span    id="auth-user"   class="auth-user" hidden>
+        <span class="auth-username"></span>
+        <button id="btn-logout" class="btn btn-auth-mini">Logout</button>
+      </span>
+    </span>
+
+    <nav class="site-nav">
+      <!-- Primary action group (left). New game + Practice marked as
+           always-visible so they stay reachable even when the toolbar
+           is collapsed during a practice game. -->
+      <button id="btn-new"    class="btn always-visible"   title="New game">New game</button>
+      <button id="btn-undo"   class="btn"                  title="Take back last move">Undo</button>
+      <!-- Engine flavor selector — top-level, no submenu. Same <select> the
+           drawer used to own; moved here for one-click access. -->
+      <select id="select-flavor" class="header-flavor"
+              title="Switch engine variant (Stockfish build + piece-value tweaks)">
+        <optgroup label="Recommended — fast boot + max strength via background NNUE swap">
+          <option value="sf-fast">★ Fast — smallnet boot (6 MB) → bignet (75 MB) hot-swap</option>
+        </optgroup>
+        <optgroup label="Stock Stockfish 17 (unmodified)">
+          <option value="lite">Stock · Lite · MT (7 MB)</option>
+          <option value="lite-single">Stock · Lite · ST (7 MB)</option>
+          <option value="full">Stock · Full NNUE · MT (108 MB)</option>
+        </optgroup>
+        <optgroup label="Piece-value variants — FULL NNUE · MULTI-THREAD (108 MB)">
+          <option value="kaufman">Kaufman</option>
+          <option value="classical">Classical 1/3/3/5/9</option>
+          <option value="alphazero">AlphaZero-derived</option>
+          <option value="avrukh" selected>★ Avrukh (bishops nudged — default)</option>
+          <option value="avrukhplus">Avrukh+ (values + SEE pair patch)</option>
+        </optgroup>
+        <optgroup label="Piece-value variants — Full NNUE · single-thread (108 MB)">
+          <option value="kaufman-single">Kaufman</option>
+          <option value="classical-single">Classical 1/3/3/5/9</option>
+          <option value="alphazero-single">AlphaZero-derived</option>
+          <option value="avrukh-single">Avrukh</option>
+          <option value="avrukhplus-single">★ Avrukh+</option>
+        </optgroup>
+        <optgroup label="Piece-value variants — Lite 7 MB, single-thread">
+          <option value="kaufman-lite-single">Kaufman · Lite</option>
+          <option value="classical-lite-single">Classical · Lite</option>
+          <option value="alphazero-lite-single">AlphaZero · Lite</option>
+          <option value="avrukh-lite-single">Avrukh · Lite</option>
+          <option value="avrukhplus-lite-single">Avrukh+ · Lite</option>
+        </optgroup>
+        <optgroup label="Piece-value variants — Lite 7 MB, multi-thread">
+          <option value="avrukhplus-lite">★ Avrukh+ · Lite MT</option>
+        </optgroup>
+      </select>
+      <button id="btn-settings" class="btn" title="Engine settings (skill, threads, hash, arrows, piece values)">⚙ More</button>
+      <button id="btn-preload-engines" class="btn" title="Download every engine variant once and keep them in the browser forever — no more waiting on boot">⬇ Preload engines</button>
+      <button id="btn-clear-engine-cache" class="btn" title="Wipe cached engine files — use if a preload left bad data and the site is crashing">🗑 Clear engine cache</button>
+      <button id="btn-practice" class="btn always-visible" title="Play against the engine from a chosen opening">🎯 Practice</button>
+      <button id="btn-my-games" class="btn" title="Browse your archived games with eval timelines and mistake analysis">📚 My Games</button>
+      <button id="btn-mistake-bank" class="btn" title="Review positions where you played poorly — spaced repetition">🎓 Mistake Bank</button>
+      <button id="btn-drill" class="btn" title="Drill due cards — spaced-repetition review queue">🃏 Drill <span id="drill-badge" class="pill" style="display:none;margin-left:4px;padding:1px 6px;background:#dc3545;color:white;font-size:10px;">0</span></button>
+      <button id="btn-tournament" class="btn" title="Engine vs engine self-play">🏆 Tournament</button>
+      <button id="btn-restart" class="btn" title="Restart engine if stuck">♻ Restart</button>
+      <button id="btn-copy-fen"  class="btn" title="Copy current position FEN to clipboard">📋 FEN</button>
+      <button id="btn-paste-fen" class="btn" title="Paste a FEN to load a position">📥 Load FEN</button>
+      <button id="btn-editor"   class="btn" title="Set up any position on the board (new starting position)">🛠 Setup</button>
+      <button id="btn-save-pgn"  class="btn" title="Download the current game as a PGN file">💾 PGN</button>
+      <button id="btn-archive-now" class="btn" title="Analyse every move at depth 12 and archive to My Games + add mistakes to the Mistake Bank">📝 Analyse & archive</button>
+      <button id="btn-share"     class="btn" title="Copy a shareable URL for this exact position">🔗 Share</button>
+      <button id="btn-export-gif" class="btn" title="Export the game as an animated GIF with eval ticker">🎞 GIF</button>
+      <button id="btn-panels" class="btn" title="Show or hide the analysis panels below the board">👁 Panels</button>
+      <span id="user-pill" class="pill" title="Your identity — used for game archival + future DB sync">👤 —</span>
+      <button id="btn-download-log" class="btn" title="Download a diagnostic log file — send it to me if something breaks">📄 Log</button>
+      <button id="btn-reset-data" class="btn" title="Wipe local mistakes/drills and optionally delete all cloud games" style="background:#3a1a1a;color:#ff8c8c;border-color:#5a2a2a;">🗑 Reset data…</button>
+      <span id="engine-mode"  class="pill" title="Current engine + threads">loading…</span>
+
+      <!-- Engine-control group (right) — Flip / Pause / Engine on the right
+           side so they're visually separated from the setup/analysis actions. -->
+      <span class="nav-spacer"></span>
+      <button id="btn-flip"   class="btn"       title="Flip board (F)">⇅ Flip</button>
+      <button id="btn-pause"  class="btn"       title="Pause/resume engine analysis">⏸ Pause</button>
+      <button id="btn-lock"   class="btn"       title="Lock engine OFF — no analysis until unlocked">🔓 Engine</button>
+
+      <!-- Global AI bar — model + key + cost (no buttons; use per-tab CTAs) -->
+      <div class="ai-status">
+        <span class="ai-status-label">🧠 AI:</span>
+        <select id="global-ai-model" class="coach-model-input"
+                title="Model used by all AI analyses (click a tab's big button to run)">
+          <!-- Populated by main.js from MODEL_SUGGESTIONS -->
+        </select>
+        <button id="global-ai-custom" class="btn small" title="Enter a custom model name">✎</button>
+        <button id="global-ai-key" class="btn small" title="Set or change Anthropic API key">🔑 Key</button>
+        <span id="global-ai-cost" class="ai-cost" title="Session cost (all AI calls)">—</span>
+        <span class="muted" style="font-size:11px">← Click a tab (Coach / Position / Tactics) to run AI</span>
+      </div>
+    </nav>
+  </header>
+
+  <!-- Collapsible engine settings drawer -->
+  <section id="settings-drawer" class="settings-drawer" hidden>
+    <div class="setting">
+      <small class="muted" id="flavor-note">Engine build: pick from the <strong>dropdown in the top bar</strong>.</small>
+    </div>
+
+    <div class="setting">
+      <label for="range-skill">Strength (Skill Level)</label>
+      <div class="range-wrap">
+        <input id="range-skill" type="range" min="0" max="20" step="1" value="20">
+        <span id="skill-val" class="badge">20</span>
+      </div>
+      <small class="muted">0 ≈ beginner, 20 = full strength</small>
+    </div>
+
+    <div class="setting">
+      <label for="range-multipv">MultiPV (top N candidate lines)</label>
+      <div class="range-wrap">
+        <input id="range-multipv" type="range" min="1" max="5" step="1" value="3">
+        <span id="multipv-val" class="badge">3</span>
+      </div>
+    </div>
+
+    <div class="setting">
+      <label for="range-threads">Threads
+        <small class="muted" id="threads-hw"></small>
+      </label>
+      <div class="range-wrap">
+        <input id="range-threads" type="range" min="1" max="16" step="1" value="1">
+        <span id="threads-val" class="badge">1</span>
+      </div>
+      <small class="muted">Max = cores on this machine. Requires multi-thread engine.</small>
+    </div>
+
+    <div class="setting">
+      <label for="limit-mode">Search limit</label>
+      <div class="row-compact">
+        <select id="limit-mode">
+          <option value="depth">By depth (stops at target)</option>
+          <option value="movetime">By time (ms)</option>
+          <option value="infinite" selected>Infinite — keep calculating (default)</option>
+        </select>
+        <input id="limit-value" type="number" min="1" value="18" class="limit-input" disabled>
+      </div>
+      <small class="muted">Infinite runs forever until you change position. At depth 18, Stockfish finishes in ~1 sec — that's why analysis "stops".</small>
+    </div>
+
+    <div class="setting">
+      <label for="select-hash">Transposition cache (Hash)
+        <small class="muted" id="hash-hw"></small>
+      </label>
+      <div class="row-compact">
+        <select id="select-hash">
+          <!-- Populated by main.js based on detected RAM -->
+        </select>
+        <button id="btn-clear-hash" class="btn small" title="Forget all previously-analysed positions">🧹 Clear</button>
+      </div>
+      <small class="muted">Stockfish stores analysed positions here. Bigger = remembers more lines = faster on repeated positions, but uses more RAM.</small>
+    </div>
+
+    <div class="setting">
+      <label for="select-arrow-mode">Best-move arrows on board</label>
+      <select id="select-arrow-mode">
+        <option value="off" selected>Off (default) — no arrows on the board</option>
+        <option value="thin">On — thin (top 3 candidates)</option>
+        <option value="normal">On — normal (top 3 candidates)</option>
+        <option value="thick">On — thick (top 3 candidates)</option>
+        <option value="maneuver">On — maneuver (best PV, next 3 moves chained)</option>
+      </select>
+      <small class="muted">Candidate modes overlay the engine's top 3 candidate moves (green = best, blue = 2nd, grey = 3rd). Maneuver mode (lila-style) chains the first 3 moves of the principal variation so you can see the plan, not just the next move.</small>
+    </div>
+
+  </section>
+
+  <main class="uniboard">
+    <aside class="side">
+      <div class="side-card">
+        <h3>Confidence</h3>
+        <div id="confidence-display" class="confidence">
+          <span class="confidence-badge" data-level="unknown">Waiting…</span>
+          <p class="confidence-reason muted">The engine hasn't thought yet.</p>
+        </div>
+      </div>
+
+      <!-- Chess clock — positioned BETWEEN Confidence and Save position so
+           it's high up in the column and immediately visible during a
+           practice game. Visible only when practice has a clock time
+           control; shows both sides' remaining time, lights up red when
+           low, and triggers timeout loss at 0. -->
+      <div class="side-card practice-card" id="practice-clock" hidden>
+        <div class="clock-header">
+          <h3 style="margin:0;">⏱ Clock</h3>
+          <!-- Curated clock styles — big numbers / tournament-grade only. -->
+          <div class="clock-style-switcher" id="clock-style-switcher">
+            <button type="button" class="clock-style-btn" data-style="digital-mega"        title="Mega digital — huge crisp white numbers">⬛</button>
+            <button type="button" class="clock-style-btn active" data-style="digital-jumbo" title="Jumbo digital — even bigger, light theme, high-contrast (default)">🔢</button>
+            <button type="button" class="clock-style-btn" data-style="digital-stadium"      title="Stadium scoreboard — dot-matrix LED, giant numerals">🏟</button>
+            <button type="button" class="clock-style-btn" data-style="digital-chronos"      title="Chronos GX — blue 7-segment tournament clock">♟</button>
+            <button type="button" class="clock-style-btn" data-style="analog-garde"         title="Classic Garde analog (your favourite)">⏰</button>
+            <button type="button" class="clock-style-btn" data-style="analog-chrome"        title="Modern chrome analog">🔘</button>
+          </div>
+        </div>
+
+        <!-- Digital variants render into this container.
+             Labels use only a solid king glyph (♚) + coloring — no
+             "White"/"Black" words. When the user plays black, JS sets
+             data-user-color="black" on this element and CSS flips the
+             flex order so the user's own clock is always on the bottom. -->
+        <div class="clock-display" id="clock-digital" data-user-color="white">
+          <div class="clock-side" id="clock-black">
+            <span class="clock-piece clock-letter">B</span>
+            <span class="clock-time" id="clock-time-b">—</span>
+          </div>
+          <div class="clock-side" id="clock-white">
+            <span class="clock-piece clock-letter">W</span>
+            <span class="clock-time" id="clock-time-w">—</span>
+          </div>
+        </div>
+
+        <!-- Analog Garde clock — two-dial SVG panel.
+             viewBox doubled for higher detail; shape-rendering=geometricPrecision
+             keeps ticks/numerals razor-sharp at large sizes. -->
+        <div class="clock-analog" id="clock-analog" hidden>
+          <svg viewBox="0 0 320 160" class="clock-analog-svg"
+               preserveAspectRatio="xMidYMid meet"
+               shape-rendering="geometricPrecision"></svg>
+        </div>
+
+        <div class="clock-actions">
+          <button id="btn-clock-pause" class="btn clock-pause-btn" title="Pause the clock — stop both sides' time from running. Click again to resume.">⏸ Pause clock</button>
+        </div>
+        <p class="clock-format-line" id="clock-format">—</p>
+      </div>
+
+      <div class="side-card">
+        <h3>Save position</h3>
+        <button id="btn-save-as-opening" class="practice-btn save-btn" style="width:100%;">💾 Use current board position as new opening</button>
+        <p class="muted" style="font-size:11px;margin:6px 0 0;">Captures the moves played so far. Dialog asks for a name, folder, and which side you'll practice.</p>
+      </div>
+
+      <div class="side-card practice-card" id="practice-actions" hidden>
+        <h3>Practice game</h3>
+        <div class="practice-live" id="practice-live">
+          <p class="muted" style="font-size:12px;margin:0 0 8px;">Game in progress.</p>
+          <div class="practice-btn-row">
+            <button id="btn-resign"      class="practice-btn resign-btn" title="Concede the game">🏳 Resign</button>
+            <button id="btn-offer-draw"  class="practice-btn draw-btn"   title="Offer a draw — engine decides based on the current evaluation">🤝 Offer Draw</button>
+          </div>
+          <p class="practice-hint muted" id="practice-draw-response" style="font-size:11px;margin:8px 0 0;min-height:14px;"></p>
+        </div>
+        <div class="practice-over" id="practice-over" hidden>
+          <p class="practice-result" id="practice-result-banner">Result: —</p>
+          <p class="muted" style="font-size:11px;margin:4px 0 8px;">
+            Analysis unlocked — use ⏮ ◀ ▶ ⏭ and the move list to step through. Engine evaluation is now visible on every position.
+          </p>
+          <!-- Lichess-style "Learn from your mistakes" entry point. -->
+          <button id="btn-learn-mistakes" class="practice-btn learn-btn" title="Walk through each mistake/blunder — try to find a better move">
+            <span class="learn-btn-icon">🎓</span>
+            <span class="learn-btn-label">Learn from your mistakes</span>
+            <span class="learn-btn-count" id="learn-btn-count"></span>
+          </button>
+          <div class="practice-btn-row">
+            <button id="btn-practice-save"  class="practice-btn save-btn" title="Download this game as PGN">💾 Save PGN</button>
+            <button id="btn-dont-save"      class="practice-btn" title="Delete the auto-saved copy from the cloud — the local archive entry is untouched" hidden>🗑 Don't save</button>
+            <button id="btn-download-games" class="practice-btn" title="Download all your saved games as a single PGN file, optionally by date range">📥 Download games</button>
+            <button id="btn-practice-next-fav" class="practice-btn again-btn" title="Start another practice game with a random favourite opening (using your last settings)" hidden>⏭ Next random favourite</button>
+            <button id="btn-practice-again" class="practice-btn again-btn" title="Start another PRACTICE game against the engine (opens practice modal)">🎯 New practice game</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <section class="board-area">
+      <div id="board" class="cg-wrap"></div>
+      <div id="promotion-overlay" class="promotion-overlay" hidden></div>
+      <div id="board-resize" class="board-resize" title="Drag to resize board"></div>
+      <div class="board-nav" role="group" aria-label="Navigate history">
+        <button id="board-nav-start" class="nav-btn" title="First (Home)">⏮</button>
+        <button id="board-nav-prev"  class="nav-btn" title="Previous (← / wheel up)">◀</button>
+        <button id="board-nav-next"  class="nav-btn" title="Next (→ / wheel down)">▶</button>
+        <button id="board-nav-end"   class="nav-btn" title="Live (End)">⏭</button>
+        <button id="board-nav-flip"  class="nav-btn" title="Flip board (F)">⇅</button>
+        <span id="board-nav-ply" class="nav-ply muted">—</span>
+      </div>
+      <!-- Docking slot for the review-mode eval graph card. The live
+           graph lives at the bottom of <body> by default (floating
+           compact) and gets relocated here when the user clicks a
+           game from My Games, so the timeline sits embedded directly
+           beneath the board instead of floating in the viewport. -->
+      <div id="board-below-slot" class="board-below-slot"></div>
+    </section>
+
+    <section class="eval-gauge" id="eval-gauge" aria-label="Evaluation (white's view)">
+      <div class="gauge-black" id="gauge-black" style="height:50%"></div>
+      <div class="gauge-tick zero"></div>
+    </section>
+
+    <section class="tools">
+      <!-- Engine power + threat — kept at top so the ON/OFF toggle is
+           always at hand. The "thinking" readout (score/depth/PV)
+           has been split out below the move list per lila-style
+           layout where notation is primary and ceval secondary. -->
+      <div class="engine-power-row">
+        <button id="engine-power" class="engine-power" aria-live="polite">
+          <span class="engine-power-dot" aria-hidden="true"></span>
+          <span class="engine-power-label">ENGINE: ON · analyzing</span>
+          <span class="engine-power-sub">click to stop</span>
+        </button>
+        <button id="btn-threat" class="threat-btn"
+                title="Pass to the other side and see what they'd do — their biggest threat. Keyboard: x">
+          <span class="threat-label">🎯 THREAT</span>
+          <span class="threat-sub">what's their best move? (x)</span>
+        </button>
+      </div>
+      <div id="threat-output" class="threat-output" hidden></div>
+
+      <!-- Engine output (score / depth / PV lines) — moved below
+           move list via CSS `order`. -->
+      <div class="ceval">
+        <div class="ceval-top">
+          <span id="score-pearl" class="pearl">—</span>
+          <div class="ceval-meta">
+            <span id="depth-label" class="meta-big">engine booting…</span>
+            <span id="nps-label"   class="meta-nps">—</span>
+          </div>
+        </div>
+        <div class="ceval-bar"><span id="ceval-bar-fill"></span></div>
+        <div id="pv-lines" class="pv-lines"></div>
+      </div>
+
+      <!-- Tabbed: Thinking / Coach / Position / Tactics -->
+      <div class="tabbed">
+        <nav class="tab-bar" role="tablist">
+          <button class="tab-btn active" data-tab="thinking" role="tab">Thinking</button>
+          <button class="tab-btn"        data-tab="coach"    role="tab">Position + Coach</button>
+          <button class="tab-btn"        data-tab="tactics"  role="tab">Tactics</button>
+        </nav>
+
+        <div class="tab-panel" data-tab-panel="thinking">
+          <p id="narration-text" class="muted">Make a move — I'll explain what I see.</p>
+        </div>
+
+        <div class="tab-panel" data-tab-panel="coach" hidden>
+          <!-- ═══════════ ANALYSIS BUDGET PICKER ═══════════ -->
+          <div id="analysis-budget-picker" class="budget-picker" role="radiogroup" aria-label="Analysis cycles">
+            <span class="budget-picker-label">Cycles:</span>
+            <label class="budget-opt"><input type="radio" name="ai-budget" value="fast" checked><span>⚡ Fast<br><em>1 cycle · ~10s</em></span></label>
+            <label class="budget-opt"><input type="radio" name="ai-budget" value="balanced"><span>⚖ Balanced<br><em>2 cycles · ~30s</em></span></label>
+            <label class="budget-opt"><input type="radio" name="ai-budget" value="deep"><span>🔬 Deep<br><em>3 cycles · ~1min</em></span></label>
+            <label class="budget-opt"><input type="radio" name="ai-budget" value="research"><span>🧪 Research<br><em>up to 5 · ~3min</em></span></label>
+          </div>
+
+          <!-- ═══════════ THINKING DEPTH PICKER ═══════════ -->
+          <div id="thinking-depth-picker" class="budget-picker thinking-picker" role="radiogroup" aria-label="Extended thinking depth">
+            <span class="budget-picker-label">Thinking depth <em style="text-transform:none;font-weight:400;">(Opus / Sonnet only — Haiku ignores)</em>:</span>
+            <label class="budget-opt"><input type="radio" name="ai-thinking" value="off" checked><span>⏸ Off<br><em>no reasoning</em></span></label>
+            <label class="budget-opt"><input type="radio" name="ai-thinking" value="low"><span>💭 Low<br><em>2k tokens</em></span></label>
+            <label class="budget-opt"><input type="radio" name="ai-thinking" value="medium"><span>🧠 Medium<br><em>8k tokens</em></span></label>
+            <label class="budget-opt"><input type="radio" name="ai-thinking" value="high"><span>🔮 High<br><em>20k tokens</em></span></label>
+            <label class="budget-opt"><input type="radio" name="ai-thinking" value="exhaustive"><span>♾ Exhaustive<br><em>32k tokens</em></span></label>
+          </div>
+
+          <!-- ═══════════ RUN BOTH (single trigger) ═══════════ -->
+          <button id="combined-ai-btn" class="ai-big-cta combined-cta">
+            <span class="cta-title">🧠 Run both — Position + Coach in parallel</span>
+            <span class="cta-sub">Single click fires both AI analyses simultaneously. Each output lands in its own section below.</span>
+          </button>
+
+          <!-- ═══════════ POSITION SECTION (top) ═══════════ -->
+          <section class="unified-section" aria-label="Position analysis">
+            <h4 class="unified-section-h">📐 Position</h4>
+            <button id="position-ai-btn" class="ai-big-cta">
+              <span class="cta-title">🧠 AI Positional Analysis</span>
+              <span class="cta-sub">Strategy only: structure · piece quality · worst piece · long-term plan<br>(Silman/Watson style — no tactics)</span>
+            </button>
+            <div id="position-ai-output" class="coach-ai-output" hidden></div>
+            <details class="dissect-details">
+              <summary>Raw heuristic data (always available) ▾</summary>
+              <div id="dissect-strategy" class="dissect muted">Analysing position…</div>
+            </details>
+          </section>
+
+          <!-- ═══════════ COACH SECTION (below) ═══════════ -->
+          <section class="unified-section" aria-label="Coach analysis">
+            <h4 class="unified-section-h">🧠 Coach</h4>
+            <button id="coach-ai-btn" class="ai-big-cta">
+              <span class="cta-title">🧠 Ask AI Coach — General coaching</span>
+              <span class="cta-sub">Full position review: threats · weaknesses · best plan · what to avoid</span>
+            </button>
+            <div id="coach-ai-output" class="coach-ai-output" hidden></div>
+          </section>
+        </div>
+
+        <div class="tab-panel" data-tab-panel="tactics" hidden>
+          <button id="tactics-ai-btn" class="ai-big-cta">
+            <span class="cta-title">🧠 AI Tactical Analysis</span>
+            <span class="cta-sub">Forced sequences · combinations · sacrifices<br>Names the pattern: fork/pin/skewer/discovered/overload/back-rank/etc.</span>
+          </button>
+          <div id="tactics-ai-output" class="coach-ai-output" hidden></div>
+          <details class="dissect-details">
+            <summary>Raw motif scan (always available) ▾</summary>
+            <div id="dissect-tactics" class="dissect muted">Scanning tactical motifs…</div>
+          </details>
+        </div>
+      </div>
+
+      <!-- Eval timeline — SVG line chart of per-move evaluations.
+           Hidden until at least one move has been played. Click a
+           point to jump to that ply. Coloured dots mark blunders /
+           mistakes / inaccuracies (Lichess-style). -->
+      <div id="eval-timeline" class="eval-timeline" hidden>
+        <div class="eval-timeline-header">
+          <span class="eval-timeline-title">📈 Eval timeline</span>
+          <span class="eval-timeline-stats" id="eval-timeline-stats"></span>
+          <button class="panel-hide-btn" data-panel="eval-timeline" title="Hide this panel (unhide in the header menu)">✕</button>
+        </div>
+        <svg id="eval-timeline-svg" class="eval-timeline-svg" viewBox="0 0 600 100" preserveAspectRatio="none"></svg>
+      </div>
+
+      <!-- Per-ply accuracy pills — one coloured dot per move, graded
+           by how close to Stockfish's #1 pick it was. Replaces the
+           old king-safety graph which was too binary/noisy to be
+           useful. Green = best/good, yellow = inaccuracy, orange =
+           mistake, red = blunder. -->
+      <div id="accuracy-strip" class="eval-timeline" hidden>
+        <div class="eval-timeline-header">
+          <span class="eval-timeline-title">🎯 Move accuracy</span>
+          <span class="eval-timeline-stats" id="accuracy-stats"></span>
+          <button class="panel-hide-btn" data-panel="accuracy-strip" title="Hide this panel">✕</button>
+        </div>
+        <div id="accuracy-pills" class="accuracy-pills"></div>
+      </div>
+
+      <!-- Pawn-structure evolution strip (#5) -->
+      <div id="pawn-strip" class="pawn-strip" hidden>
+        <div class="pawn-strip-header">
+          <span class="pawn-strip-title">♟ Pawn structure</span>
+          <span class="pawn-strip-stats" id="pawn-strip-stats"></span>
+          <button class="panel-hide-btn" data-panel="pawn-strip" title="Hide this panel">✕</button>
+        </div>
+        <div id="pawn-strip-row" class="pawn-strip-row"></div>
+      </div>
+
+      <!-- Move list + nav -->
+      <div class="move-list-wrap">
+        <div class="move-list-header">
+          <h3>Moves</h3>
+          <div class="nav-buttons" role="group" aria-label="Navigate history">
+            <button id="nav-graph" class="nav-btn" title="Show/hide eval graph">📈</button>
+            <button id="nav-hide-panels" class="nav-btn" title="Hide/show eval bar + move accuracy">👁</button>
+            <button id="nav-start" class="nav-btn" title="First (Home)">⏮</button>
+            <button id="nav-prev"  class="nav-btn" title="Previous (←)">◀</button>
+            <button id="nav-next"  class="nav-btn" title="Next (→)">▶</button>
+            <button id="nav-end"   class="nav-btn" title="Live (End)">⏭</button>
+          </div>
+        </div>
+        <!-- Docking slot: when the user toggles the graph from the
+             move-list header, the live-graph card gets relocated
+             here so it sits above the notation at the same width as
+             the move list column. -->
+        <div id="notation-graph-slot" class="notation-graph-slot"></div>
+        <div id="move-list" class="tview2-column"></div>
+        <input id="kbd-move" class="kbd-move" type="text"
+               placeholder="Type a move: e4, Nf3, O-O… then ⏎"
+               autocomplete="off" spellcheck="false">
+        <!-- Docking slot for review-mode stats panels. When a game is
+             loaded from My Games, the per-side accuracy/mistakes/
+             blunders panels + Learn/Reanalyze CTA column get moved
+             here, directly under the move list — where a Lichess
+             user would expect to see them. Empty when no game loaded. -->
+        <div id="notation-below-slot" class="notation-below-slot"></div>
+      </div>
+
+      <input id="depth-input" type="hidden" value="18">
+    </section>
+  </main>
+
+  <!-- API key modal (legacy — used only on file:// or static hosts). In
+       server-proxied mode it's replaced by the password gate below. -->
+  <div id="apikey-modal" class="modal" hidden>
+    <div class="modal-card">
+      <button class="modal-close" id="apikey-close">×</button>
+      <h3>🔑 Anthropic API Key</h3>
+      <p class="muted">Paste your key below. Stored in this browser's localStorage only, sent only to Anthropic.</p>
+      <p class="muted" id="apikey-status" style="margin-top:4px;font-size:11px;font-family:var(--font-mono)"></p>
+      <input id="apikey-input" type="password" class="apikey-input"
+             placeholder="sk-ant-api03-…" autocomplete="off" spellcheck="false">
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <button id="apikey-save"  class="btn" style="background:var(--c-secondary);color:white">Save</button>
+        <button id="apikey-clear" class="btn" style="background:var(--c-bad);color:white">Clear key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Password gate modal (server-proxied mode). Shown on first visit if
+       no valid sf_site cookie, and also re-shown when user picks Sonnet/Opus
+       without the premium cookie. -->
+  <div id="gate-modal" class="modal" hidden>
+    <div class="modal-card">
+      <h3 id="gate-title">🔒 Enter password</h3>
+      <p id="gate-sub" class="muted">
+        Ask the site owner for the password.
+      </p>
+      <p id="gate-status" class="muted" style="margin-top:4px;font-size:11px;font-family:var(--font-mono);min-height:14px"></p>
+      <input id="gate-input" type="password" class="apikey-input"
+             placeholder="password" autocomplete="off" spellcheck="false">
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <button id="gate-submit" class="btn" style="background:var(--c-secondary);color:white">Unlock</button>
+        <button id="gate-cancel" class="btn" hidden>Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Practice modal -->
+  <div id="practice-modal" class="modal" hidden>
+    <div class="modal-card modal-wide">
+      <button class="modal-close" id="practice-close">×</button>
+      <h3>🎯 Practice from an opening</h3>
+      <p class="muted">Pick an opening, your color, and the engine's strength. Both sides play the opening moves automatically, then it's your turn.</p>
+
+      <div class="tournament-setup">
+        <div class="setting" style="grid-column: 1 / -1;">
+          <label>
+            <input type="checkbox" id="practice-use-current">
+            Use the current board position as the starting position
+          </label>
+          <small class="muted" id="practice-use-current-info" style="font-family: var(--font-mono); font-size: 11px; display:block;"></small>
+          <div id="practice-save-current" hidden style="margin-top:8px;padding:8px;border:1px solid rgba(78,201,176,0.3);border-radius:6px;background:rgba(78,201,176,0.08);">
+            <div style="font-size:11px;color:#4ec9b0;margin-bottom:6px;font-weight:600;letter-spacing:0.04em;">➕ SAVE THIS POSITION TO YOUR PRACTICE LIST</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+              <input id="psc-name" type="text" placeholder="Opening name" style="flex:2;min-width:140px;font-size:12px;padding:4px 6px;">
+              <input id="psc-folder" type="text" placeholder="Folder" value="My openings" list="psc-folder-list" style="flex:1;min-width:100px;font-size:12px;padding:4px 6px;">
+              <select id="psc-side" style="font-size:12px;padding:4px 6px;" title="Which side you practice this as — defaults to whose move it is in the FEN">
+                <option value="white">♔ White</option>
+                <option value="black">♚ Black</option>
+                <option value="both">↔ Both</option>
+              </select>
+              <button type="button" id="psc-save" class="btn" style="font-size:11px;padding:4px 10px;background:rgba(78,201,176,0.22);border-color:#4ec9b0;">➕ Save</button>
+            </div>
+            <small id="psc-status" class="muted" style="font-size:10px;display:block;margin-top:4px;"></small>
+            <datalist id="psc-folder-list"></datalist>
+          </div>
+        </div>
+        <div class="setting" id="practice-opening-row" style="grid-column: 1 / -1;">
+          <label for="practice-opening">Opening</label>
+          <input id="practice-opening-search" type="search" placeholder="🔎 Search 3,950 openings… (Najdorf, London, Maroczy, Benoni Four Pawns, Ruy Open St Petersburg…)" autocomplete="off" spellcheck="false">
+          <div style="display:flex;align-items:center;gap:8px;margin:4px 0;flex-wrap:wrap;">
+            <small class="muted" id="practice-opening-search-count" style="font-size: 11px; flex:1;"></small>
+            <label style="font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="practice-opening-favs-only"> ⭐ Favourites only</label>
+            <button type="button" id="practice-pick-random" class="btn" style="font-size:11px;padding:3px 8px;" title="Pick a random opening from your favourites (single game)">🎲 Random</button>
+            <button type="button" id="practice-start-queue" class="btn" style="font-size:11px;padding:3px 8px;background:rgba(255,193,7,0.2);border-color:#ffc107;" title="Start a rotation — every game will play a fresh random favourite. Tick the boxes below to use a subset.">🔀 Queue mode</button>
+            <button type="button" id="practice-add-opening" class="btn" style="font-size:11px;padding:3px 8px;background:rgba(78,201,176,0.18);border-color:#4ec9b0;" title="Add a new opening from a FEN position — saves to your custom openings">➕ Add opening</button>
+            <button type="button" id="practice-fen-search" class="btn" style="font-size:11px;padding:3px 8px;" title="Paste a FEN and find any practice opening that reaches that position">🔍 FEN search</button>
+            <button type="button" id="practice-collapse-all" class="btn" style="font-size:11px;padding:3px 8px;" title="Collapse all opening folders">▼ Collapse all</button>
+          </div>
+          <!-- Tree-view with collapsible parent families. Replaces the
+               flat <select> — the full 3,950-entry list is unreadable
+               as a dropdown. -->
+          <div id="practice-opening-tree" class="practice-opening-tree"></div>
+          <!-- Hidden native select keeps the form contract working and
+               stores the picked value in the same "Group//index" format
+               the rest of the app expects. -->
+          <select id="practice-opening" class="tourn-select" style="display:none;"></select>
+          <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+            <small class="muted" id="practice-opening-moves" style="font-family: var(--font-mono); font-size: 11px; flex:1;"></small>
+            <button type="button" id="practice-toggle-fav" class="btn" style="font-size:11px;padding:4px 10px;" title="Star the currently selected opening">⭐ Star</button>
+          </div>
+        </div>
+        <div class="setting">
+          <label for="practice-color">Play as</label>
+          <select id="practice-color" class="tourn-select">
+            <option value="white">White</option>
+            <option value="black">Black</option>
+          </select>
+        </div>
+        <div class="setting" style="grid-column: 1 / -1;">
+          <label for="practice-preset" style="font-weight:600;">🎚 Strength preset</label>
+          <select id="practice-preset" class="tourn-select">
+            <option value="custom">⚙ Custom (use sliders below)</option>
+            <option value="beginner">🐣 Beginner · hangs pieces</option>
+            <option value="novice">👦 Novice · basic tactics miss</option>
+            <option value="casual">🎭 Casual · sees 1-move threats</option>
+            <option value="club">🏡 Club player · solid, some misses</option>
+            <option value="solid-club" selected>♟ Solid club · steady play</option>
+            <option value="tournament">🎯 Tournament · rarely blunders</option>
+            <option value="expert">🎓 Expert · consistent accuracy</option>
+            <option value="master">🏆 Master · punishes inaccuracies</option>
+            <option value="im">👑 IM · no major blunders</option>
+            <option value="gm">🦁 GM · full strength</option>
+          </select>
+          <small class="muted" id="practice-preset-hint">Steady play, solid calculation at short time controls.</small>
+        </div>
+        <div class="setting">
+          <label for="practice-strength">Engine strength (Skill 0-20)</label>
+          <div class="range-wrap">
+            <input id="practice-strength" type="range" min="0" max="20" step="1" value="12">
+            <span id="practice-strength-val" class="badge">12</span>
+          </div>
+          <small class="muted">0 ≈ beginner · 10 ≈ club · 15 ≈ strong · 20 = full</small>
+        </div>
+        <div class="setting">
+          <label for="practice-style">Opponent style</label>
+          <select id="practice-style" class="tourn-select">
+            <option value="default"   selected>🎯 Balanced (engine picks #1)</option>
+            <option value="karpov">     ♜ Karpov — slow positional, avoids risk</option>
+            <option value="tal">        ♞ Tal — sacrificial, prefers imbalance</option>
+            <option value="aronian">    ♝ Aronian — sharp, tactical</option>
+            <option value="capablanca">♕ Capablanca — endgame-minded, simplifies</option>
+            <option value="kasparov">   ♔ Kasparov — aggressive centre, attacking</option>
+          </select>
+          <small class="muted">Style biases the engine toward a specific type of move from its top candidates. Skill still controls raw strength.</small>
+        </div>
+        <div class="setting" style="grid-column: 1 / -1;">
+          <label for="practice-clock-mode" style="font-weight:600;">⏱ Clock mode</label>
+          <select id="practice-clock-mode">
+            <option value="none" selected>No clock — hide the clock card entirely</option>
+            <option value="untimed">Untimed — clock counts UP showing time used</option>
+            <option value="timed">Timed — real chess clock counting DOWN (preset or custom)</option>
+          </select>
+          <small class="muted" id="practice-clock-mode-hint">No clock will be shown during this game. Switch to Timed to enable a real chess clock.</small>
+          <div style="margin-top:6px;" id="practice-untimed-inc-wrap" hidden>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;">
+              <input type="checkbox" id="practice-untimed-increment-on">
+              Untimed mode: add increment per move (seconds)
+              <input id="practice-untimed-increment" type="number" min="0" max="60" value="0" style="width:60px;padding:2px 6px;" disabled>
+            </label>
+          </div>
+          <!-- Legacy hidden checkbox kept so any code/localStorage-draft that
+               still reads it doesn't break. Derived from the new dropdown. -->
+          <input type="checkbox" id="practice-use-clock" hidden>
+        </div>
+        <div class="setting" id="practice-limit-row">
+          <label for="practice-limit">Engine think time / move</label>
+          <div class="row-compact">
+            <select id="practice-limit-mode">
+              <option value="seconds" selected>Seconds / move (fixed)</option>
+              <option value="depth">By depth</option>
+              <option value="movetime">By time (ms)</option>
+            </select>
+            <!-- Fixed-seconds preset (shown when mode=seconds) -->
+            <select id="practice-seconds-preset" class="tourn-select">
+              <option value="1">1 s  · instant</option>
+              <option value="2">2 s  · bullet</option>
+              <option value="3" selected>3 s  · blitz</option>
+              <option value="5">5 s  · rapid</option>
+              <option value="10">10 s · thoughtful</option>
+              <option value="15">15 s · deep</option>
+              <option value="20">20 s · tournament</option>
+              <option value="30">30 s · very deep</option>
+              <option value="60">60 s · classical</option>
+            </select>
+            <!-- Legacy numeric input (shown when mode=depth or movetime) -->
+            <input id="practice-limit-value" type="number" min="1" value="14" class="limit-input" hidden>
+          </div>
+        </div>
+        <div class="setting" id="practice-clock-row" style="display:none;">
+          <label for="practice-clock-preset">Clock preset</label>
+          <select id="practice-clock-preset" class="tourn-select">
+            <option value="1+0">⚡ Bullet · 1 min (no increment)</option>
+            <option value="3+2">⚡ Blitz · 3 min + 2 sec increment</option>
+            <option value="5+3" selected>⚡ Blitz · 5 min + 3 sec increment</option>
+            <option value="10+0">🏇 Rapid · 10 min (no increment)</option>
+            <option value="15+10">🏇 Rapid · 15 min + 10 sec increment</option>
+            <option value="30+0">♞ Classical · 30 min</option>
+            <option value="custom">⚙ Custom…</option>
+          </select>
+          <div id="practice-clock-custom" class="row-compact" style="display:none;margin-top:6px;">
+            <input id="practice-clock-minutes" type="number" min="1" max="999" value="5" class="limit-input" title="Minutes">
+            <span style="align-self:center;">+</span>
+            <input id="practice-clock-increment" type="number" min="0" max="60" value="3" class="limit-input" title="Increment per move (seconds)">
+            <span style="align-self:center;font-size:11px;color:var(--c-font-dim);">sec increment</span>
+          </div>
+          <small class="muted">Run out of time = lose. Engine thinks proportionally to its remaining time (longer when it's the first move, shorter when the game draws out).</small>
+        </div>
+      </div>
+
+      <div class="tournament-actions">
+        <button id="practice-start" class="btn" style="background:var(--c-secondary);color:white">▶ Start practice</button>
+        <button id="practice-replay" class="btn" style="background:var(--c-accent,#7aa7ff);color:white" hidden>🔁 Replay last (<span id="practice-replay-name">—</span>)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Save-as-practice-opening modal — small modal triggered from the
+       sidebar "Save as practice opening" button. Lets the user name
+       the custom variation and place it under an existing group or a
+       new one. -->
+  <!-- My Games modal — browse archived games, view per-move evals, reload into board -->
+  <div id="my-games-modal" class="modal" hidden>
+    <div class="modal-card modal-wide">
+      <button class="modal-close" id="my-games-close">×</button>
+      <h3>📚 My Games</h3>
+      <div id="my-games-stats" class="muted" style="font-size:12px;margin-bottom:10px;">—</div>
+      <div style="margin-bottom:10px;">
+        <input id="my-games-filter" type="search" placeholder="🔎 Filter by opening, opponent, result, or date…" autocomplete="off" style="width:100%;">
+      </div>
+      <div id="my-games-list" style="max-height:400px;overflow-y:auto;border:1px solid var(--c-border);border-radius:6px;padding:6px;"></div>
+      <div class="tournament-actions" style="margin-top:10px;">
+        <button id="my-games-clear" class="btn" style="background:rgba(220,53,69,0.2);border-color:#dc3545;" title="Permanently delete all archived games">🗑 Clear all</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mistake Bank modal — list positions with severity, filter, load into board -->
+  <div id="mistake-bank-modal" class="modal" hidden>
+    <div class="modal-card modal-wide">
+      <button class="modal-close" id="mistake-bank-close">×</button>
+      <h3>🎓 Mistake Bank</h3>
+      <div id="mistake-bank-stats" class="muted" style="font-size:12px;margin-bottom:10px;">—</div>
+      <div style="margin-bottom:10px;display:flex;gap:6px;flex-wrap:wrap;">
+        <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="mb-filter-blunder"    checked> Blunders (≥200cp)</label>
+        <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="mb-filter-mistake"    checked> Mistakes (100–199)</label>
+        <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="mb-filter-inaccuracy"        > Inaccuracies (50–99)</label>
+        <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="mb-filter-by-user"    checked> Only my mistakes (not opponent's)</label>
+      </div>
+      <div id="mistake-bank-list" style="max-height:400px;overflow-y:auto;border:1px solid var(--c-border);border-radius:6px;padding:6px;"></div>
+    </div>
+  </div>
+
+  <!-- Drill modal (#3) — spaced-repetition queue. Shows one due mistake
+       at a time, user finds the better move on the board, then grades
+       themselves Again / Hard / Good / Easy. -->
+  <div id="drill-modal" class="modal" hidden>
+    <div class="modal-card modal-wide">
+      <button class="modal-close" id="drill-close">×</button>
+      <h3>🃏 Drill — spaced-repetition review</h3>
+      <div id="drill-empty" class="muted" style="padding:20px;text-align:center;" hidden>
+        <p><strong>Nothing due right now 🎉</strong></p>
+        <p style="font-size:12px;">Play more games and make some mistakes — they'll show up here for review. Already-drilled cards re-appear on the SRS schedule (1 day / 3 days / 7 days / 21 days based on how well you did).</p>
+      </div>
+      <div id="drill-active" style="display:none;">
+        <div class="muted" style="font-size:12px;margin-bottom:8px;">
+          Card <strong id="drill-position">1</strong> of <strong id="drill-total">?</strong> ·
+          <strong id="drill-status">new</strong> ·
+          <strong id="drill-severity">mistake</strong>
+        </div>
+        <div id="drill-prompt" style="font-size:13px;margin-bottom:12px;">
+          Find the better move. Once you've decided, reveal the engine's answer below.
+        </div>
+        <div class="muted" style="font-size:11px;">Context:</div>
+        <div id="drill-context" style="font-size:12px;margin-bottom:10px;"></div>
+        <details id="drill-reveal" style="margin-bottom:10px;">
+          <summary style="cursor:pointer;font-weight:600;color:var(--c-accent,#7aa7ff);">▼ Reveal what was played and what should have been played</summary>
+          <div id="drill-reveal-body" style="margin-top:8px;font-size:12px;"></div>
+        </details>
+        <div class="tournament-actions" style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap;">
+          <button id="drill-again" class="btn" style="background:rgba(220,53,69,0.2);border-color:#dc3545;" title="Missed it — see this card again soon">❌ Again (1 day)</button>
+          <button id="drill-hard"  class="btn" style="background:rgba(253,126,20,0.2);border-color:#fd7e14;" title="Got it but it was hard">😓 Hard</button>
+          <button id="drill-good"  class="btn" style="background:rgba(82,196,26,0.2);border-color:#52c41a;" title="Got it correctly">✅ Good</button>
+          <button id="drill-easy"  class="btn" style="background:rgba(122,167,255,0.2);border-color:var(--c-accent,#7aa7ff);" title="Too easy — space this further out">⚡ Easy</button>
+        </div>
+        <div class="muted" style="margin-top:8px;font-size:11px;" id="drill-stats">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="save-opening-modal" class="modal" hidden>
+    <div class="modal-card">
+      <button class="modal-close" id="save-opening-close">×</button>
+      <h3>💾 Save this board position as a new practice opening</h3>
+      <p class="muted">Captures the moves played so far. Next time you open Practice, it appears under the folder you pick. Pick which side you'd like to practice by default — you can change it later via the star + W/B/↔ buttons.</p>
+      <div class="tournament-setup">
+        <div class="setting" style="grid-column: 1 / -1;">
+          <label for="save-opening-name">Name</label>
+          <input id="save-opening-name" type="text" placeholder="e.g. 'My Najdorf trap line'" maxlength="80">
+        </div>
+        <div class="setting" style="grid-column: 1 / -1;">
+          <label for="save-opening-group">Folder</label>
+          <select id="save-opening-group" class="tourn-select"></select>
+          <input id="save-opening-new-group" type="text" placeholder="Or type a new folder name" style="margin-top:6px;" maxlength="60">
+        </div>
+        <div class="setting" style="grid-column: 1 / -1;">
+          <label for="save-opening-side">Practice as</label>
+          <select id="save-opening-side" class="tourn-select">
+            <option value="white">White</option>
+            <option value="black">Black</option>
+            <option value="both">Both (random each time in rotation)</option>
+          </select>
+        </div>
+        <div class="setting" style="grid-column: 1 / -1;">
+          <small class="muted" id="save-opening-preview" style="font-family:var(--font-mono);font-size:11px;display:block;"></small>
+        </div>
+      </div>
+      <div class="tournament-actions">
+        <button id="save-opening-submit" class="btn" style="background:var(--c-secondary);color:white">💾 Save opening</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tournament modal -->
+  <div id="tournament-modal" class="modal" hidden>
+    <div class="modal-card modal-wide">
+      <button class="modal-close" id="tournament-close">×</button>
+      <h3>🏆 Engine vs engine self-play</h3>
+      <p class="muted">Two variants play each other; colors alternate each game.</p>
+
+      <div class="tournament-setup">
+        <div class="setting">
+          <label for="tourn-a">Engine A</label>
+          <select id="tourn-a" class="tourn-select"></select>
+        </div>
+        <div class="setting">
+          <label for="tourn-b">Engine B</label>
+          <select id="tourn-b" class="tourn-select"></select>
+        </div>
+        <div class="setting">
+          <label for="tourn-games">Games</label>
+          <input id="tourn-games" type="number" min="2" max="200" step="2" value="10">
+        </div>
+        <div class="setting">
+          <label for="tourn-limit-mode">Time control</label>
+          <div class="row-compact">
+            <select id="tourn-limit-mode">
+              <option value="depth" selected>By depth</option>
+              <option value="movetime">By time (ms / move)</option>
+              <option value="nodes">By nodes / move</option>
+            </select>
+            <input id="tourn-limit-value" type="number" min="1" value="10" class="limit-input">
+          </div>
+        </div>
+        <div class="setting" style="grid-column: 1 / -1;">
+          <label for="tourn-opening">Forced opening (both engines play these moves first)</label>
+          <select id="tourn-opening" class="tourn-select"></select>
+          <small class="muted" id="tourn-opening-moves" style="font-family: var(--font-mono); font-size: 11px;"></small>
+        </div>
+        <div class="setting" style="grid-column: 1 / -1;">
+          <label>
+            <input type="checkbox" id="tourn-use-board-fen">
+            Use current main-board position as starting FEN (overrides forced opening)
+          </label>
+          <small class="muted" id="tourn-board-fen-preview" style="font-family: var(--font-mono); font-size: 10px;"></small>
+        </div>
+      </div>
+
+      <div class="tournament-actions">
+        <button id="tourn-start"  class="btn" style="background:var(--c-secondary);color:white">▶ Start</button>
+        <button id="tourn-abort"  class="btn" disabled>■ Stop</button>
+        <button id="tourn-export" class="btn" disabled title="Export all games as a PGN file">💾 Export PGN</button>
+      </div>
+
+      <div id="tourn-standings" class="tourn-standings">
+        <p class="muted">No games yet — press Start.</p>
+      </div>
+
+      <div id="tourn-live" class="tourn-live muted"></div>
+
+      <div id="tourn-log" class="tourn-log"></div>
+    </div>
+  </div>
+
+  <!-- Board editor — set up any position, which then becomes the new
+       starting position (undo / scroll-back cannot go earlier). -->
+  <div id="editor-modal" class="modal" hidden>
+    <div class="modal-card modal-wide">
+      <button class="modal-close editor-close">×</button>
+      <h3>🛠 Setup position</h3>
+      <p class="muted">Pick a piece from the palette, click a board square to place it. Pick 🗑 trash to remove a piece. Apply makes this the new starting position.</p>
+
+      <div class="editor-palette"></div>
+
+      <div id="editor-board" class="editor-board"></div>
+
+      <div class="editor-opts">
+        <label><input type="radio" name="editor-turn" value="w" checked> White to move</label>
+        <label><input type="radio" name="editor-turn" value="b"> Black to move</label>
+      </div>
+
+      <!-- Castling rights — auto-inferred from king/rook home squares on
+           open, but the user can override here (e.g. mark White as having
+           already castled kingside, etc.). -->
+      <div class="editor-castle">
+        <span class="editor-castle-label">Castling rights (uncheck if already castled):</span>
+        <div class="editor-castle-row">
+          <label><input type="checkbox" id="castle-K"> White O-O</label>
+          <label><input type="checkbox" id="castle-Q"> White O-O-O</label>
+          <label><input type="checkbox" id="castle-k"> Black O-O</label>
+          <label><input type="checkbox" id="castle-q"> Black O-O-O</label>
+        </div>
+      </div>
+
+      <p id="editor-status" class="muted" style="font-family:var(--font-mono);font-size:11px;word-break:break-all;min-height:14px"></p>
+
+      <div class="editor-actions">
+        <button id="editor-cancel"  class="btn">Cancel</button>
+        <button id="editor-clear"   class="btn">Clear board</button>
+        <button id="editor-standard" class="btn">Standard start</button>
+        <button id="editor-apply"   class="btn" style="background:var(--c-secondary);color:white">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="why-modal" class="modal" hidden>
+    <div class="modal-card">
+      <button class="modal-close" id="modal-close">×</button>
+      <h3 id="why-title">Why not <span id="why-move">?</span></h3>
+      <p id="why-summary" class="muted"></p>
+      <div class="modal-narration" id="why-narration"></div>
+      <div class="modal-line muted"><strong>Line:</strong> <span id="why-line"></span></div>
+    </div>
+  </div>
+
+  <!-- FEN-search modal — paste any FEN and find openings whose final
+       position matches. Useful for 'is this opening already in my
+       list?' before adding a duplicate. -->
+  <div id="fen-search-modal" class="modal-backdrop" hidden>
+    <div class="modal-card" style="width:520px;max-width:96vw;">
+      <h3>🔍 Search openings by FEN</h3>
+      <p class="muted" style="font-size:12px;margin:4px 0 12px;">Paste any FEN. Matches are openings whose final position after all their moves equals this FEN (ignoring move counters).</p>
+      <div class="auth-label">
+        <label>FEN
+          <input id="fs-fen" type="text" placeholder="rnbqkbnr/pppppppp/..." autocomplete="off">
+        </label>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:4px;">
+        <button id="fs-use-current" type="button" class="btn" style="font-size:11px;">📋 Use current board FEN</button>
+        <button id="fs-reset-start" type="button" class="btn" style="font-size:11px;">♟ Reset to start</button>
+        <button id="fs-search" type="button" class="btn btn-auth-primary" style="font-size:12px;margin-left:auto;">🔍 Search</button>
+      </div>
+      <div id="fs-preview-wrap" style="margin-top:10px;display:flex;justify-content:center;"></div>
+      <div id="fs-results" style="margin-top:12px;max-height:260px;overflow-y:auto;"></div>
+      <div class="auth-error" id="fs-error"></div>
+      <div class="auth-actions">
+        <button id="fs-close" class="btn" style="flex:1;">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- "Add new opening" modal — paste a FEN (or reuse the current
+       main-board FEN), pick a name / side / folder. Saves to the
+       user's custom openings list so it appears in the practice tree
+       on the next modal-open. -->
+  <div id="add-opening-modal" class="modal-backdrop" hidden>
+    <div class="modal-card" style="width:480px;max-width:96vw;">
+      <h3>➕ Add a new practice opening</h3>
+      <p class="muted" style="font-size:12px;margin:4px 0 12px;">Paste a FEN (or use the current board), name it, pick which side you'll practice, and save it to a folder. It'll appear in the practice tree.</p>
+      <div class="auth-label">
+        <label>Starting FEN
+          <input id="ao-fen" type="text" placeholder="rnbqkbnr/pppppppp/..." autocomplete="off">
+        </label>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:4px;">
+        <button id="ao-use-current" type="button" class="btn" style="font-size:11px;">📋 Use current board FEN</button>
+        <button id="ao-reset-start" type="button" class="btn" style="font-size:11px;">♟ Reset to start position</button>
+      </div>
+      <div id="ao-preview-wrap" style="margin-top:10px;display:flex;justify-content:center;"></div>
+      <div class="auth-label">
+        <label>Name
+          <input id="ao-name" type="text" placeholder="e.g. My c3 Sicilian line" autocomplete="off">
+        </label>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <div class="auth-label" style="flex:1;">
+          <label>Folder
+            <input id="ao-folder" type="text" placeholder="My openings" value="My openings" autocomplete="off">
+          </label>
+        </div>
+        <div class="auth-label" style="flex:1;">
+          <label>Practice as
+            <select id="ao-side">
+              <option value="white">White</option>
+              <option value="black">Black</option>
+              <option value="both">Both (random each time)</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div class="auth-error" id="ao-error"></div>
+      <div class="auth-actions">
+        <button id="ao-save"  class="btn btn-auth-primary">Save opening</button>
+        <button id="ao-close" class="btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sign-in / sign-up modal. Single form; a toggle link at the
+       bottom flips between modes. -->
+  <div id="auth-modal" class="modal-backdrop" hidden>
+    <div class="modal-card auth-card">
+      <h3 id="auth-title">Sign in</h3>
+      <p class="muted" style="font-size:12px;margin:4px 0 12px;">Sync your games + mistakes + favourites across devices.</p>
+      <form id="auth-form">
+        <label class="auth-label">Username
+          <input id="auth-username" type="text" autocomplete="username" required minlength="2" maxlength="32" pattern="[a-zA-Z0-9_][a-zA-Z0-9_.\-]*">
+        </label>
+        <label class="auth-label">Password
+          <input id="auth-password" type="password" autocomplete="current-password" required minlength="6" maxlength="128">
+        </label>
+        <div class="auth-error" id="auth-error"></div>
+        <div class="auth-actions">
+          <button type="submit" id="auth-submit" class="btn btn-auth-primary">Sign in</button>
+          <button type="button" id="auth-close" class="btn">Cancel</button>
+        </div>
+        <p class="auth-toggle-line">
+          <a href="#" id="auth-toggle">Need an account? Sign up</a>
+        </p>
+      </form>
+    </div>
+  </div>
+
+  <!-- (Old cloud games modal removed — replaced by the full-page
+       📚 My Games tab. window.__openDownloadGamesModal still exists as
+       a legacy shim; it now routes to the new tab.) -->
+  <div id="dl-games-modal" hidden style="display:none;"></div>
+
+  <!-- ───────────────────────────────────────────────────────────────
+       📚 My Games — full-page tab.
+       Hidden by default; the header button toggles body.mg-open which
+       flips display via CSS. Contains: left filter sidebar, main list
+       of game rows, game-detail pane (eval graph + per-side stats +
+       load-into-board button).
+  ─────────────────────────────────────────────────────────────── -->
+  <div id="my-games-tab" class="mg-tab" hidden>
+    <div class="mg-topbar">
+      <h2 class="mg-title">📚 My Games</h2>
+      <div class="mg-stats-strip" id="mg-stats-strip">
+        <span class="mg-stat" id="mg-stat-total">—</span>
+        <span class="mg-stat mg-stat-w" id="mg-stat-wins">—</span>
+        <span class="mg-stat mg-stat-d" id="mg-stat-draws">—</span>
+        <span class="mg-stat mg-stat-l" id="mg-stat-losses">—</span>
+        <span class="mg-stat"           id="mg-stat-mistakes">—</span>
+      </div>
+      <button id="mg-close" class="mg-close-big" title="Close My Games and return to the board (Esc)">← Back to board</button>
+      <div class="mg-top-actions">
+        <button id="mg-export-all" class="btn" title="Download every matching game as one PGN file">📥 Export PGN</button>
+      </div>
+    </div>
+    <div class="mg-body">
+      <aside class="mg-filters" id="mg-filters">
+        <div class="mg-filter-group">
+          <label class="mg-filter-label">Date range</label>
+          <div class="mg-quick-dates">
+            <button type="button" class="mg-chip" data-range="today">Today</button>
+            <button type="button" class="mg-chip" data-range="7d">7d</button>
+            <button type="button" class="mg-chip" data-range="30d">30d</button>
+            <button type="button" class="mg-chip" data-range="90d">90d</button>
+            <button type="button" class="mg-chip" data-range="year">Year</button>
+            <button type="button" class="mg-chip mg-chip-active" data-range="all">All</button>
+          </div>
+          <div class="mg-date-inputs">
+            <label>From <input type="date" id="mg-from"></label>
+            <label>To   <input type="date" id="mg-to"></label>
+          </div>
+        </div>
+
+        <div class="mg-filter-group">
+          <label class="mg-filter-label">Result</label>
+          <div class="mg-segmented" data-filter="result">
+            <button type="button" class="mg-seg mg-seg-active" data-value="">All</button>
+            <button type="button" class="mg-seg" data-value="win">Wins</button>
+            <button type="button" class="mg-seg" data-value="loss">Losses</button>
+            <button type="button" class="mg-seg" data-value="draw">Draws</button>
+          </div>
+        </div>
+
+        <div class="mg-filter-group">
+          <label class="mg-filter-label">Color</label>
+          <div class="mg-segmented" data-filter="color">
+            <button type="button" class="mg-seg mg-seg-active" data-value="">Any</button>
+            <button type="button" class="mg-seg" data-value="white">♔ White</button>
+            <button type="button" class="mg-seg" data-value="black">♚ Black</button>
+          </div>
+        </div>
+
+        <div class="mg-filter-group">
+          <label class="mg-filter-label">Mode</label>
+          <div class="mg-segmented" data-filter="mode">
+            <button type="button" class="mg-seg mg-seg-active" data-value="">Any</button>
+            <button type="button" class="mg-seg" data-value="practice">Practice</button>
+            <button type="button" class="mg-seg" data-value="analysis">Analysis</button>
+          </div>
+        </div>
+
+        <div class="mg-filter-group">
+          <label class="mg-filter-label">Opening</label>
+          <input type="search" id="mg-opening-search" placeholder="Ruy Lopez, B90, Najdorf…" autocomplete="off" spellcheck="false">
+        </div>
+
+        <div class="mg-filter-group">
+          <label class="mg-filter-label">Cleanliness</label>
+          <div class="mg-segmented" data-filter="cleanliness">
+            <button type="button" class="mg-seg mg-seg-active" data-value="">Any</button>
+            <button type="button" class="mg-seg" data-value="clean"    title="No mistakes or blunders">Clean</button>
+            <button type="button" class="mg-seg" data-value="mistakes" title="At least 1 mistake">Mistakes</button>
+            <button type="button" class="mg-seg" data-value="blunders" title="At least 1 blunder">Blunders</button>
+          </div>
+        </div>
+
+        <div class="mg-filter-group">
+          <label class="mg-filter-label" for="mg-sort">Sort</label>
+          <select id="mg-sort">
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="most_mistakes">Most mistakes</option>
+            <option value="fewest_mistakes">Fewest mistakes</option>
+            <option value="most_moves">Most moves</option>
+          </select>
+        </div>
+
+        <div class="mg-filter-group">
+          <button id="mg-reset-filters" class="btn" style="width:100%;">Reset filters</button>
+        </div>
+      </aside>
+
+      <section class="mg-main">
+        <div class="mg-list" id="mg-list">
+          <div class="mg-empty">Sign in to see your saved games.</div>
+        </div>
+        <div class="mg-list-footer" id="mg-list-footer" hidden>
+          <button id="mg-load-more" class="btn">Load more</button>
+        </div>
+      </section>
+
+      <section class="mg-detail" id="mg-detail" hidden>
+        <div class="mg-detail-head">
+          <div>
+            <div class="mg-detail-title" id="mg-detail-title">—</div>
+            <div class="mg-detail-sub" id="mg-detail-sub">—</div>
+          </div>
+          <div class="mg-detail-actions">
+            <button id="mg-detail-load"    class="btn btn-auth-primary" title="Load this game onto the board for full analysis">▶ Load on board</button>
+            <button id="mg-detail-learn"   class="btn btn-learn-mistakes" title="Replay this game and find a better move at each mistake — Lichess-style">▶ LEARN FROM YOUR MISTAKES</button>
+            <button id="mg-detail-pgn"     class="btn" title="Download this game as a PGN file">📥 PGN</button>
+            <button id="mg-detail-delete"  class="btn mg-delete" title="Delete this game from the cloud">🗑 Delete</button>
+          </div>
+        </div>
+        <div class="mg-graph-wrap">
+          <canvas id="mg-eval-graph"></canvas>
+        </div>
+        <div class="mg-stats-wrap" id="mg-stats-wrap"></div>
+      </section>
+    </div>
+  </div>
+
+  <!-- 📚 My Games quick-switch picker — appears after clicking a
+       game row so the user can load another without reopening the
+       full tab. Populated from the last fetched list. -->
+  <div id="mg-quickpick" class="mg-quickpick" hidden>
+    <div class="mg-quickpick-head">
+      <strong>📚 Switch game</strong>
+      <button id="mg-quickpick-open" class="btn btn-mini" title="Open the full My Games tab">⤢</button>
+      <button id="mg-quickpick-close" class="btn btn-mini" title="Hide this picker">✕</button>
+    </div>
+    <div class="mg-quickpick-list" id="mg-quickpick-list"></div>
+  </div>
+
+  <!-- ───────────────────────────────────────────────────────────────
+       Live eval graph — sits beneath the board in the analysis layout.
+       Toggled by a small "📈 Graph" button; during practice it's
+       hidden by default (anti-cheat) but the toggle is available.
+  ─────────────────────────────────────────────────────────────── -->
+  <div id="live-graph-card" class="live-graph-card" hidden>
+    <div class="live-graph-head">
+      <strong>📈 Evaluation timeline</strong>
+      <button id="live-graph-close" class="btn btn-mini" title="Hide the timeline">✕</button>
+    </div>
+    <div class="live-graph-body">
+      <canvas id="live-eval-graph"></canvas>
+    </div>
+    <div class="live-graph-movetime" id="live-movetime-wrap" hidden>
+      <div class="muted" style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:2px;">Move times</div>
+      <canvas id="live-movetime-chart"></canvas>
+    </div>
+    <div class="live-graph-stats" id="live-graph-stats"></div>
+  </div>
+
+  <!-- AGPL-3.0: network users must be informed where to get the source.
+       Footer link satisfies section 13 of the license. -->
+  <footer class="site-footer">
+    <span class="muted">stockfish-explain &middot;
+      <a href="https://github.com/heartdrmd/stockfish-explain" target="_blank" rel="noopener">📂 Source</a> &middot;
+      <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">AGPL-3.0</a> &middot;
+      uses <a href="https://github.com/lichess-org/lila" target="_blank" rel="noopener">lichess-org/lila</a> (AGPL-3.0) code for eval graph + analysis helpers
+    </span>
+  </footer>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

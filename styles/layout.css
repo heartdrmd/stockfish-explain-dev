@@ -1,0 +1,401 @@
+/* Uniboard grid — mirrors lichess's responsive col1/col2/col3 layout. */
+
+.site-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  background: var(--c-bg);
+  border-bottom: 1px solid var(--c-border);
+  min-height: 60px;
+  flex-wrap: wrap;
+}
+
+.site-title {
+  font-size: 20px;
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+/* Pushes subsequent nav items to the right edge. Used to separate the
+   Flip/Pause/Engine controls from the rest. */
+.nav-spacer { flex: 1 1 auto; }
+
+/* Prominent toolbar-hide toggle button. */
+.btn-toggle-toolbar {
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  background: linear-gradient(180deg, #6a4fff, #4a2fcf);
+  color: #fff;
+  border: 1px solid #3a1fa0;
+  padding: 6px 14px;
+  font-size: 13px;
+}
+.btn-toggle-toolbar:hover { filter: brightness(1.1); }
+
+/* Always-visible quick-action buttons — New game + Practice next to
+   the Toolbar toggle. Blue to stand out; always reachable even when
+   the nav is auto-collapsed during a practice game. */
+.btn-quick-action {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  background: linear-gradient(180deg, #3b8bff, #2563cc);
+  color: #fff;
+  border: 1px solid #1d4b99;
+  padding: 6px 14px;
+  font-size: 13px;
+  margin-left: 4px;
+}
+.btn-quick-action:hover { filter: brightness(1.1); }
+.btn-quick-action:active { filter: brightness(0.95); }
+
+/* Auth area in the header — green 'Sign in' pill / compact logout. */
+.auth-area { display: inline-flex; align-items: center; gap: 6px; margin-left: 4px; }
+.btn-auth {
+  font-weight: 700;
+  background: linear-gradient(180deg, #4ec9b0, #2ea88c);
+  color: #0b2a23;
+  border: 1px solid #2a8975;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+.btn-auth:hover { filter: brightness(1.08); }
+.auth-user {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--c-font-dim);
+}
+.auth-user .auth-username {
+  color: #4ec9b0; font-weight: 700; padding: 0 4px;
+}
+.btn-auth-mini {
+  font-size: 11px;
+  padding: 3px 8px;
+  background: transparent;
+  color: var(--c-font-dim);
+  border: 1px solid var(--c-border);
+}
+.btn-auth-mini:hover { color: #e06; border-color: #e06; }
+
+/* Auth modal + download modal — compact card on a dim backdrop. */
+.modal-backdrop.auth-backdrop, .modal-backdrop {
+  /* fallback styling in case base doesn't cover it */
+}
+.modal-card.auth-card { width: 340px; max-width: 92vw; }
+.auth-label {
+  display: block;
+  margin: 10px 0 2px;
+  font-size: 12px;
+  color: var(--c-font-dim);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.auth-label input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  font-size: 14px;
+  background: var(--c-bg-low, #1e1e1e);
+  color: var(--c-font, #eee);
+  border: 1px solid var(--c-border, #333);
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+.auth-label input:focus { outline: none; border-color: #4ec9b0; }
+.auth-error {
+  color: #f48771;
+  font-size: 12px;
+  margin: 8px 0 0;
+  min-height: 14px;
+}
+.auth-actions {
+  display: flex; gap: 8px; margin-top: 14px;
+}
+.auth-actions .btn { flex: 1; }
+.btn-auth-primary {
+  background: linear-gradient(180deg, #4ec9b0, #2ea88c);
+  color: #0b2a23;
+  border: 1px solid #2a8975;
+  font-weight: 700;
+}
+.btn-auth-primary:hover { filter: brightness(1.08); }
+.auth-toggle-line {
+  margin: 12px 0 0;
+  font-size: 11px;
+  text-align: center;
+  color: var(--c-font-dim);
+}
+.auth-toggle-line a {
+  color: #4ec9b0; text-decoration: none;
+}
+.auth-toggle-line a:hover { text-decoration: underline; }
+
+/* Cloud games browser list (inside the download modal). Each row is
+   a single game: date · result · opening · #mistakes · delete. */
+.cloud-games-list {
+  border: 1px solid var(--c-border, #333);
+  border-radius: 4px;
+  padding: 4px;
+  background: var(--c-bg-low, #111);
+}
+.cloud-games-list .cg-empty {
+  padding: 18px;
+  text-align: center;
+  color: var(--c-font-dim, #888);
+  font-size: 13px;
+}
+.cloud-games-list .cg-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--c-border, #2a2a2a);
+  font-size: 13px;
+}
+.cloud-games-list .cg-row:last-child { border-bottom: none; }
+.cloud-games-list .cg-date  { color: var(--c-font-dim); font-family: monospace; width: 150px; flex: 0 0 auto; }
+.cloud-games-list .cg-result {
+  font-weight: 700; width: 50px; flex: 0 0 auto; text-align: center;
+  font-family: monospace;
+}
+.cloud-games-list .cg-opening { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-font); }
+.cloud-games-list .cg-stats   { color: var(--c-font-dim); font-size: 11px; white-space: nowrap; }
+.cloud-games-list .cg-delete {
+  background: transparent;
+  color: var(--c-font-dim);
+  border: 1px solid var(--c-border);
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.cloud-games-list .cg-delete:hover { color: #f48771; border-color: #f48771; }
+
+/* Collapsed-toolbar state: hide everything in the nav except
+   always-visible items. The toggle button lives outside .site-nav so
+   it stays clickable regardless. */
+body.nav-collapsed .site-nav > * {
+  display: none !important;
+}
+body.nav-collapsed .site-nav > .always-visible,
+body.nav-collapsed .always-visible {
+  display: inline-flex !important;
+}
+body.nav-collapsed .site-header { min-height: 40px; padding: 6px 14px; }
+
+/* Clock lives in the right-side panel alongside Confidence and Save
+   position (its original home). We used to reparent it into a column
+   beside the board but it broke board sizing; reverted. */
+
+.depth-ctrl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--c-font-dim);
+}
+.depth-ctrl input {
+  width: 50px;
+  background: var(--c-bg-low);
+  color: var(--c-font);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-small);
+  padding: 3px 6px;
+}
+
+/* --- col1 (mobile, default) --- */
+.uniboard {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "board"
+    "tools"
+    "side";
+}
+
+.uniboard .side        { grid-area: side; }
+.uniboard .board-area  {
+  grid-area: board;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-self: start;   /* hug the left edge so the gauge sticks to the board */
+  max-width: 560px;
+  width: 100%;
+}
+.uniboard .board-area > #board {
+  aspect-ratio: 1 / 1;
+  width: 100%;
+  height: auto;
+}
+/* When the JS resize handle sets explicit width+height on #board, those win */
+.uniboard .eval-gauge  { display: none; }
+.uniboard .tools       { grid-area: tools; }
+
+/* --- col2 (≥ 800px OR landscape) --- */
+@media (min-width: 800px), (orientation: landscape) and (min-width: 560px) {
+  .uniboard {
+    /* board column = auto (fits to its actual width), gauge 24px, tools fills the rest */
+    grid-template-columns: auto 24px minmax(280px, 1fr);
+    grid-template-areas:
+      "board gauge tools"
+      "side  gauge tools";
+    gap: 10px;
+    padding: 16px;
+  }
+  .uniboard .board-area { max-width: none; }
+  .uniboard .eval-gauge { display: flex; }
+}
+
+/* --- col3 (≥ 1260px) --- */
+@media (min-width: 1260px) {
+  .uniboard {
+    /* side fixed, board auto (fits its width), gauge 28px, tools fills the rest */
+    grid-template-columns: minmax(240px, 300px) auto 28px minmax(300px, 1fr);
+    grid-template-areas:
+      "side board gauge tools"
+      "side board gauge tools";
+    gap: 12px;
+    padding: 20px;
+  }
+}
+
+/* Side column cards */
+.side { display: flex; flex-direction: column; gap: 10px; }
+.side-card {
+  background: var(--c-bg);
+  border-radius: var(--radius-panel);
+  padding: 14px;
+  border: 1px solid var(--c-border);
+}
+.side-card p { font-size: 13px; line-height: 1.5; margin: 0; color: var(--c-font-dim); }
+
+/* Tools column */
+.tools {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* Right-column hierarchy (top → bottom):
+   1. Engine power on/off
+   2. Engine thinking (score/depth/PV)
+   3. Move accuracy strip
+   4. Notation (move list)
+   5. Coach tabs, eval timeline, pawn strip
+   CSS order only — HTML order is preserved so JS queries stay intact. */
+.tools > .engine-power-row { order: 0; }
+.tools > .ceval            { order: 1; }
+.tools > #accuracy-strip   { order: 2; }
+.tools > .move-list-wrap   { order: 3; }
+.tools > .tabbed           { order: 4; }
+.tools > #eval-timeline    { order: 5; }
+.tools > #pawn-strip       { order: 6; }
+
+/* ─── Mobile (#24) — phone-width optimisation ─── */
+/* On narrow screens (< 640px), the tools panel becomes a sticky
+   bottom-sheet that the user can expand from a peek strip. The
+   sidebar (confidence / save / practice cards) hides by default to
+   reclaim screen real estate for the board.
+
+   Triggered ONLY when the portrait-mobile breakpoint applies; desktop
+   landscape still uses the full 3-column layout. */
+@media (max-width: 640px) {
+  body.mobile-mode .uniboard {
+    padding: 6px;
+    gap: 6px;
+  }
+  /* Mobile: hide the side panel broadly BUT keep the clock card
+     visible — user needs it during practice. Float it as a fixed
+     bar at the top of the viewport so it doesn't steal board space. */
+  body.mobile-mode .uniboard .side { display: none; }
+  body.mobile-mode #practice-clock:not([hidden]) {
+    display: block !important;
+    position: fixed;
+    top: env(safe-area-inset-top, 8px);
+    left: 8px;
+    right: 8px;
+    z-index: 100;
+    max-width: none;
+    width: auto;
+    margin: 0;
+    padding: 4px 8px;
+    background: var(--c-bg);
+    border: 1px solid var(--c-border);
+    border-radius: 6px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+  }
+  /* Shrink digital-jumbo / mega clock numbers so the whole clock
+     fits in a thin top bar on mobile portrait. */
+  body.mobile-mode #practice-clock .clock-display[data-style="digital-jumbo"] .clock-time,
+  body.mobile-mode #practice-clock .clock-display[data-style="digital-mega"] .clock-time {
+    font-size: 32px;
+  }
+  body.mobile-mode #practice-clock .clock-style-switcher,
+  body.mobile-mode #practice-clock .clock-format-line,
+  body.mobile-mode #practice-clock .clock-actions {
+    display: none;
+  }
+  body.mobile-mode #practice-clock .clock-display {
+    flex-direction: row;
+    gap: 12px;
+    padding: 2px;
+  }
+  body.mobile-mode #practice-clock .clock-side {
+    flex: 1 1 0;
+    padding: 4px 8px;
+  }
+  body.mobile-mode .uniboard .board-area { max-width: 100vw; }
+  body.mobile-mode .tools {
+    position: sticky;
+    bottom: 0;
+    background: var(--c-bg);
+    border-top: 1px solid var(--c-border);
+    z-index: 20;
+    max-height: 50vh;
+    overflow-y: auto;
+    padding: 8px 10px;
+    border-radius: 12px 12px 0 0;
+    box-shadow: 0 -4px 12px rgba(0,0,0,0.4);
+  }
+  body.mobile-mode.mobile-drawer-collapsed .tools {
+    max-height: 40px;
+    overflow: hidden;
+  }
+  /* Peek handle at the top of the drawer — clickable to toggle */
+  body.mobile-mode .tools::before {
+    content: "▲ Drag / tap to expand · tap again to collapse";
+    display: block;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--c-font-dim);
+    padding: 4px 0 8px;
+    border-bottom: 1px solid var(--c-border);
+    margin-bottom: 8px;
+    cursor: pointer;
+  }
+  body.mobile-mode.mobile-drawer-collapsed .tools::before {
+    content: "▼ Tap to expand coach panel";
+    border-bottom: none;
+    margin-bottom: 0;
+  }
+  /* Condensed headline view — show only the eval-timeline + coach
+     response headline. Hide anything not critical. */
+  body.mobile-mode.mobile-drawer-collapsed #eval-timeline,
+  body.mobile-mode.mobile-drawer-collapsed #pawn-strip,
+  body.mobile-mode.mobile-drawer-collapsed #king-safety-timeline,
+  body.mobile-mode.mobile-drawer-collapsed #heat-map,
+  body.mobile-mode.mobile-drawer-collapsed .move-list-wrap,
+  body.mobile-mode.mobile-drawer-collapsed .tabbed { display: none; }
+}

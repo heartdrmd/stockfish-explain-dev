@@ -1,0 +1,21 @@
+{
+  "name": "stockfish-explain-dev",
+  "version": "1.1.0",
+  "description": "Lichess-style chess explainer with Stockfish WASM + gated Claude AI coach.",
+  "type": "module",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "serve-python": "python3 scripts/serve.py"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "cookie-parser": "^1.4.7",
+    "pg": "^8.13.1",
+    "bcryptjs": "^2.4.3"
+  },
+  "license": "AGPL-3.0-or-later"
+}

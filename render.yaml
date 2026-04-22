@@ -1,0 +1,34 @@
+databases:
+  # Postgres for multi-user game archives, mistakes, SRS, favourites.
+  # Starter plan is $7/mo (0.5 GB storage, 97 connection limit). More
+  # than enough for a friend-group: ~10 KB/game × 1000 games = 10 MB
+  # per user. Swap to 'basic' ($12) if we hit the storage cap later.
+  - name: stockfish-explain-dev-db
+    plan: starter
+    region: ohio
+    databaseName: stockfish_explain_dev
+    user: stockfish_explain_dev
+
+services:
+  - type: web
+    name: stockfish-explain-dev
+    runtime: node
+    plan: starter
+    region: ohio
+    buildCommand: "npm install && bash scripts/fetch-full-wasms.sh && bash scripts/fetch-lichess-stockfish.sh"
+    startCommand: "node server.js"
+    autoDeploy: true
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: NODE_ENV
+        value: production
+      # DATABASE_URL is auto-populated by Render when the web service
+      # is linked to the database above via the fromDatabase binding.
+      # When creating the DB manually, paste the Internal Database URL
+      # into the Environment tab instead.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: stockfish-explain-dev-db
+          property: connectionString
+    healthCheckPath: /api/whoami
