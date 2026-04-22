@@ -3415,6 +3415,25 @@ async function main() {
                     const finalUci = (result && result.uci) || ev.detail.best;
                     const didDeviate = !!(result && result.deviated);
                     const wasForced  = !!(result && result.forced);
+                    // Clock refund — if we burned the configured fork
+                    // think-time on a forced position, give that time
+                    // back to the engine's clock so timed games aren't
+                    // penalised for variation-mode searches that
+                    // weren't really needed. User-requested.
+                    if (wasForced && variationFork?.thinkMs && window.__clock?.active) {
+                      try {
+                        const cs = window.__clock;
+                        // Engine's color = the side that's NOT the user.
+                        const engineSide = practiceColor === 'white' ? 'b' : 'w';
+                        if (engineSide === 'w') cs.msWhite = (cs.msWhite || 0) + variationFork.thinkMs;
+                        else                    cs.msBlack = (cs.msBlack || 0) + variationFork.thinkMs;
+                        console.log('[variation] forced → refunded engine clock', {
+                          engineSide, refundMs: variationFork.thinkMs,
+                          newMs: engineSide === 'w' ? cs.msWhite : cs.msBlack,
+                        });
+                        try { renderClock(); } catch {}
+                      } catch (err) { console.warn('[variation] clock refund failed', err); }
+                    }
                     // If this was an actual deviation (non-#1 pick),
                     // increment the deviation counter so the caller's
                     // isActive() check retires the window once the

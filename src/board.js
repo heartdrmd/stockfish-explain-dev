@@ -561,6 +561,23 @@ export class BoardController extends EventTarget {
       viewPly: this.viewPly,
       fenBefore: this.chess.fen(),
     });
+    // ─── Post-game mainline lock ──────────────────────────────────
+    // Once a practice game has ended, the game notation stays as
+    // "gospel" — no more moves extend the mainline. User can still
+    // explore variations by clicking back to any earlier ply and
+    // playing a different move there; those become sibling branches
+    // (because the mainline already has a child at that path).
+    // Only block moves AT the terminal leaf (no next move recorded).
+    if (document.body.classList.contains('practice-finished')) {
+      const nodesAt = this.tree.nodesAlong(this.tree.currentPath);
+      const currentNode = nodesAt.length ? nodesAt[nodesAt.length - 1] : this.tree.root;
+      const atLeaf = currentNode && (!currentNode.children || currentNode.children.length === 0);
+      if (atLeaf && this.isAtLive()) {
+        console.log('[move] blocked — game ended at this position; navigate back to explore variations');
+        try { this._syncToChessground(); } catch {}
+        return;
+      }
+    }
     if (!this.isAtLive()) {
       // User moved from an old ply — truncate chess.js to the view ply
       // and branch from here. The variation tree keeps the old line as a
