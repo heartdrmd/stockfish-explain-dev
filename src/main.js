@@ -5628,6 +5628,28 @@ async function main() {
         console.warn('[verify] mistakes verification failed', err);
         updateLearnButton();
       }
+      // Explicitly restore the engine to the user's TOOLBAR preferences
+      // (Skill Level + MultiPV) before kicking live analysis. The post-
+      // game chain (retrospectiveSweep + verifyMistakesAtMaxStrength +
+      // opening-variation forks during the game) can each transiently
+      // change engine.skill or engine.multipv; if any of those restore
+      // paths miss, live review shows the wrong number of PV lines or
+      // a skill-capped eval. User reported engine 'needed off/on to get
+      // going' because MultiPV was stuck at 5 (variation-mode) instead
+      // of their toolbar 3. Force-set to the slider values, regardless
+      // of what engine state we happen to be in.
+      try {
+        const prefMultiPV = ui.rangeMultipv ? +ui.rangeMultipv.value : null;
+        const prefSkill   = ui.rangeSkill   ? +ui.rangeSkill.value   : null;
+        if (prefMultiPV && prefMultiPV > 0 && prefMultiPV !== engine.multipv) {
+          console.log('[practice] post-game: restoring engine MultiPV', { from: engine.multipv, to: prefMultiPV });
+          engine.setMultiPV(prefMultiPV);
+        }
+        if (prefSkill != null && prefSkill !== engine.skill) {
+          console.log('[practice] post-game: restoring engine Skill', { from: engine.skill, to: prefSkill });
+          engine.setSkill(prefSkill);
+        }
+      } catch (err) { console.warn('[practice] post-game restore failed', err); }
       // Kick LIVE analysis on the final position. retrospectiveSweep
       // held the engine hostage for the per-ply sweep, so by the time
       // this async chain finishes the engine is idle and no one is
