@@ -98,6 +98,8 @@ export function startSession(openingName, openingEco) {
     active:          !!s.enabled,
     forkIndex:       0,   // how many engine-move opportunities consumed
     deviationsUsed:  0,   // how many of those ended in actual non-#1 pick
+    recordedOk:      0,   // successful POST/localStorage recordings
+    recordedFailed:  0,   // failed recordings (network/auth error etc.)
     maxForks:        Math.min(Math.max(1, +s.maxForks || 1), 15),
     maxDeviations:   Math.min(Math.max(1, +s.maxDeviations || 3), 15),
     thinkMs:         Math.min(Math.max(5_000, +s.thinkMs || 30_000), 120_000),
@@ -109,10 +111,32 @@ export function startSession(openingName, openingEco) {
     openingName: openingName || null,
     openingEco:  openingEco  || null,
   };
+  console.log('[variation] session start', {
+    enabled: _session.active,
+    opening: openingName,
+    maxForks: _session.maxForks,
+    maxDeviations: _session.maxDeviations,
+    thinkMs: _session.thinkMs,
+    devCurve: _session.devCurve,
+    tolerance: { early: _session.earlyTol, late: _session.lateTol },
+    varietyK: _session.varietyK,
+    remember: _session.remember,
+  });
   return _session;
 }
 
-export function endSession() { _session = null; }
+export function endSession() {
+  if (_session) {
+    console.log('[variation] session end', {
+      opening: _session.openingName,
+      forksConsumed: _session.forkIndex,
+      deviationsUsed: _session.deviationsUsed,
+      recordedOk: _session.recordedOk,
+      recordedFailed: _session.recordedFailed,
+    });
+  }
+  _session = null;
+}
 
 export function isActive() {
   if (!_session || !_session.active) return false;
@@ -144,7 +168,7 @@ export function consumeFork() {
     : _session.earlyTol;
   const devProb = _session.devCurve[0] + t * (_session.devCurve[1] - _session.devCurve[0]);
   _session.forkIndex++;
-  return {
+  const params = {
     forkIndex:    i + 1,              // 1-indexed for display
     forksPlanned: n,
     tolerance,
@@ -152,6 +176,12 @@ export function consumeFork() {
     varietyK: _session.varietyK,
     thinkMs: _session.thinkMs,
   };
+  console.log('[variation] consumeFork', {
+    ...params,
+    deviationsUsed: _session.deviationsUsed,
+    maxDeviations: _session.maxDeviations,
+  });
+  return params;
 }
 
 // ─── Memory (Postgres for logged-in, localStorage for guests) ──────
@@ -190,29 +220,50 @@ export async function fetchHistoryForFen(fen) {
 // position to (but not including) `fen`. Stored alongside the record
 // so the report can rebuild an ECO tree with shared-prefix grouping.
 export async function recordPlay(fen, uci, prefixMoves = null) {
-  if (!_session || !_session.remember) return;
+  if (!_session) { console.warn('[variation] recordPlay ignored — no session'); return; }
+  if (!_session.remember) {
+    console.log('[variation] recordPlay skipped — remember=false', { fen: fen.slice(0, 30) + '…', uci });
+    return;
+  }
   const opName = _session.openingName;
   const opEco  = _session.openingEco;
   if (isLoggedIn()) {
     try {
-      await fetch('/api/variations', {
+      const r = await fetch('/api/variations', {
         method: 'POST',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ fen, uci, opening_name: opName, opening_eco: opEco, prefix_moves: prefixMoves }),
       });
-    } catch (err) { console.warn('[variations] recordPlay POST failed', err); }
+      if (r.ok) {
+        _session.recordedOk++;
+        console.log('[variation] recordPlay cloud OK', { uci, prefixLen: prefixMoves ? prefixMoves.split(/\s+/).length : 0 });
+      } else {
+        _session.recordedFailed++;
+        console.warn('[variation] recordPlay cloud NON-OK', { status: r.status, uci });
+      }
+    } catch (err) {
+      _session.recordedFailed++;
+      console.warn('[variation] recordPlay POST failed', err);
+    }
   } else {
-    const mem = loadGuestMemory();
-    if (!mem[fen]) mem[fen] = {};
-    const cur = mem[fen][uci] || { times: 0, opName, opEco };
-    cur.times = (cur.times || 0) + 1;
-    cur.at = new Date().toISOString();
-    cur.opName = opName || cur.opName;
-    cur.opEco  = opEco  || cur.opEco;
-    if (prefixMoves) cur.prefix = prefixMoves;
-    mem[fen][uci] = cur;
-    saveGuestMemory(mem);
+    try {
+      const mem = loadGuestMemory();
+      if (!mem[fen]) mem[fen] = {};
+      const cur = mem[fen][uci] || { times: 0, opName, opEco };
+      cur.times = (cur.times || 0) + 1;
+      cur.at = new Date().toISOString();
+      cur.opName = opName || cur.opName;
+      cur.opEco  = opEco  || cur.opEco;
+      if (prefixMoves) cur.prefix = prefixMoves;
+      mem[fen][uci] = cur;
+      saveGuestMemory(mem);
+      _session.recordedOk++;
+      console.log('[variation] recordPlay guest OK', { uci, timesNow: cur.times });
+    } catch (err) {
+      _session.recordedFailed++;
+      console.warn('[variation] recordPlay guest save failed', err);
+    }
   }
 }
 
@@ -338,13 +389,24 @@ export async function pickCandidate(topMoves, fen, forkParams) {
     const gap = best.score - t.score;
     if (gap <= forkParams.tolerance) cands.push({ uci: t.pv[0], gap });
   }
-  if (cands.length === 0) return { uci: best.pv[0], deviated: false };
-  if (cands.length === 1) return { uci: cands[0].uci, deviated: false };
+  if (cands.length === 0) {
+    console.log('[variation] pickCandidate: no candidates within tolerance; playing #1', { best: best.pv[0] });
+    return { uci: best.pv[0], deviated: false };
+  }
+  if (cands.length === 1) {
+    console.log('[variation] pickCandidate: only 1 candidate within tolerance; no deviation possible', { uci: cands[0].uci });
+    return { uci: cands[0].uci, deviated: false };
+  }
 
   // Decide: deviate or not?
-  const rollDeviate = Math.random() < forkParams.devProb;
+  const roll = Math.random();
+  const rollDeviate = roll < forkParams.devProb;
   if (!rollDeviate) {
-    return { uci: cands[0].uci, deviated: false };   // always pick #1 when not deviating
+    console.log('[variation] pickCandidate: dice rolled NO-deviate', {
+      roll: roll.toFixed(3), devProb: forkParams.devProb.toFixed(3),
+      candidatesInTol: cands.length, best: cands[0].uci,
+    });
+    return { uci: cands[0].uci, deviated: false };
   }
 
   // Deviating: weighted pick from the NON-#1 pool (fall back to #1 if
@@ -369,10 +431,21 @@ export async function pickCandidate(topMoves, fen, forkParams) {
   });
 
   const sum = weights.reduce((a, b) => a + b, 0);
-  let roll = Math.random() * sum;
+  let rollW = Math.random() * sum;
+  let pickedIdx = tail.length - 1;
   for (let i = 0; i < tail.length; i++) {
-    roll -= weights[i];
-    if (roll <= 0) return { uci: tail[i].uci, deviated: true };
+    rollW -= weights[i];
+    if (rollW <= 0) { pickedIdx = i; break; }
   }
-  return { uci: tail[tail.length - 1].uci, deviated: true };
+  const picked = tail[pickedIdx];
+  console.log('[variation] pickCandidate: DEVIATED', {
+    picked: picked.uci,
+    gap: picked.gap,
+    pickedIdx: pickedIdx + 1,   // 1-indexed (0 would be best, excluded from tail)
+    candidatesInTol: cands.length,
+    tailSize: tail.length,
+    weights: weights.map(w => +w.toFixed(3)),
+    history: [...timesPlayed.entries()],
+  });
+  return { uci: picked.uci, deviated: true };
 }
