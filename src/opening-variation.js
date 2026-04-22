@@ -42,8 +42,17 @@ const DEFAULTS = Object.freeze({
   tighten:         true,
   lateTolerance:   10,          // 5..50 cp (only used if tighten)
   devWeight:       'strong',    // 'mild' | 'medium' | 'strong'
+  varietyBias:     'moderate',  // 'even' | 'mild' | 'moderate' | 'strong'
   rememberMemory:  true,
 });
+
+// varietyBias → k value in gapScore formula: weight = 1 / (1 + gap/k).
+// Smaller k = steeper penalty on further-from-best candidates.
+//  even = 300  → gap-50 gets 86% weight  (candidates near-equal)
+//  mild = 100  → gap-50 gets 67% weight
+//  moderate =50 → gap-50 gets 50% weight (current default)
+//  strong = 25 → gap-50 gets 33% weight  (heavy bias to close-to-best)
+const VARIETY_BIAS_K = { even: 300, mild: 100, moderate: 50, strong: 25 };
 
 // devWeight → (earlyDeviationProb, lateDeviationProb). "Deviation
 // probability" = how likely the picker is to choose a NON-#1 candidate
@@ -92,6 +101,7 @@ export function startSession(openingName, openingEco) {
     earlyTol:    Math.min(Math.max(5, +s.earlyTolerance || 50), 200),
     lateTol:     s.tighten ? Math.min(Math.max(3, +s.lateTolerance || 10), 100) : null,
     devCurve:    DEV_WEIGHT_CURVE[s.devWeight] || DEV_WEIGHT_CURVE.strong,
+    varietyK:    VARIETY_BIAS_K[s.varietyBias] || VARIETY_BIAS_K.moderate,
     remember:    !!s.rememberMemory,
     openingName: openingName || null,
     openingEco:  openingEco  || null,
@@ -126,6 +136,7 @@ export function consumeFork() {
     forksPlanned: n,
     tolerance,
     devProb,
+    varietyK: _session.varietyK,
     thinkMs: _session.thinkMs,
   };
 }
@@ -285,8 +296,11 @@ export async function pickCandidate(topMoves, fen, forkParams) {
 
   // Weighting: inverse of cp-gap (closer to best = higher weight) *
   //            anti-repetition decay (0.3^times).
+  // `k` (from varietyBias setting) controls the steepness: smaller k
+  // biases more strongly toward close-to-best candidates.
+  const k = forkParams.varietyK || 50;
   const weights = tail.map(c => {
-    const gapScore   = 1 / (1 + c.gap / 50);       // gap=0 → 1.0, gap=50 → 0.5
+    const gapScore   = 1 / (1 + c.gap / k);
     const timesSeen  = timesPlayed.get(c.uci) || 0;
     const repeatDecay = Math.pow(0.3, timesSeen);  // 0→1, 1→0.3, 2→0.09
     return Math.max(0.001, gapScore * repeatDecay);

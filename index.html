@@ -1315,6 +1315,17 @@
       </section>
 
       <section class="vs-section">
+        <h4 class="vs-h">⚖️ Within-pool bias (when deviating, how strongly to prefer close-to-best)</h4>
+        <div class="vs-row" role="radiogroup">
+          <label class="vs-radio"><input type="radio" name="vs-variety-bias" value="even">     <span>Even</span></label>
+          <label class="vs-radio"><input type="radio" name="vs-variety-bias" value="mild">     <span>Mild</span></label>
+          <label class="vs-radio"><input type="radio" name="vs-variety-bias" value="moderate"> <span>Moderate</span></label>
+          <label class="vs-radio"><input type="radio" name="vs-variety-bias" value="strong">   <span>Strong</span></label>
+        </div>
+        <small class="muted">Even = all candidates equally likely · Strong = heavy weight on close-to-best, rare far-from-best picks. Applies the same across all forks.</small>
+      </section>
+
+      <section class="vs-section">
         <h4 class="vs-h">🧠 Memory (anti-repetition)</h4>
         <label class="vs-row"><input type="checkbox" id="vs-remember"> <span>Remember which variations I've faced</span></label>
         <div class="vs-row" style="gap:8px;flex-wrap:wrap;">

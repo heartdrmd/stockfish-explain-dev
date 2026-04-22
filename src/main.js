@@ -8337,6 +8337,9 @@ async function main() {
       const dw = s.devWeight || 'strong';
       const radios = modal.querySelectorAll('input[name="vs-dev-weight"]');
       radios.forEach(r => r.checked = (r.value === dw));
+      const vb = s.varietyBias || 'moderate';
+      const vbRadios = modal.querySelectorAll('input[name="vs-variety-bias"]');
+      vbRadios.forEach(r => r.checked = (r.value === vb));
       // Memory-scope hint: show which opening the reset+report act on.
       const lastOp = window.__practiceLastOpName || null;
       if (memoryHint) {
@@ -8348,6 +8351,7 @@ async function main() {
 
     function formToObject() {
       const dwEl = Array.from(modal.querySelectorAll('input[name="vs-dev-weight"]')).find(r => r.checked);
+      const vbEl = Array.from(modal.querySelectorAll('input[name="vs-variety-bias"]')).find(r => r.checked);
       return {
         enabled:        inEnabled.checked,
         maxForks:       +inForks.value,
@@ -8356,6 +8360,7 @@ async function main() {
         tighten:        inTighten.checked,
         lateTolerance:  +inLate.value,
         devWeight:      dwEl ? dwEl.value : 'strong',
+        varietyBias:    vbEl ? vbEl.value : 'moderate',
         rememberMemory: inRemember.checked,
       };
     }
