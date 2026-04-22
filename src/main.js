@@ -1935,12 +1935,28 @@ async function main() {
       }
       // Replay the moves from the PGN body — tree.pgn() writes SAN moves
       // after the tag block. Parse the move text and play each.
+      //
+      // CRITICAL: apply each move to BOTH board.chess AND board.tree.
+      // Before this fix we only updated chess.js; board.tree stayed
+      // empty (just the root). When the user played their next move
+      // post-restore, tree.addNode fired with currentPath='' — so the
+      // whole game was missing from the notation tree. Clicking a move
+      // in the notation jumped to "nothing" (tree.nodesAlong('') → [])
+      // and navigateToTreePath rendered the starting position.
       const pgnBody = (draft.pgn.split('\n\n').slice(-1)[0] || '').replace(/\{[^}]*\}/g, '').replace(/\([^)]*\)/g, '').trim();
       const sanTokens = pgnBody
         .split(/\s+/)
         .filter(t => t && !/^\d+\.+$/.test(t) && !/^(1-0|0-1|1\/2-1\/2|\*)$/.test(t));
+      const tree = board.tree;
       for (const san of sanTokens) {
-        try { board.chess.move(san, { sloppy: true }); } catch {}
+        let result = null;
+        try { result = board.chess.move(san, { sloppy: true }); } catch {}
+        if (!result) continue;
+        try {
+          const uci = result.from + result.to + (result.promotion || '');
+          const addRes = tree.addNode({ uci, san: result.san, fen: board.chess.fen() }, tree.currentPath);
+          if (addRes) tree.currentPath = addRes.path;
+        } catch (err) { console.warn('[draft] tree.addNode failed for', san, err); }
       }
       // Hard re-render
       board.cg.set({ fen: board.chess.fen(), turnColor: board.chess.turn() === 'w' ? 'white' : 'black' });
