@@ -8452,28 +8452,30 @@ async function main() {
   (() => {
     const modal = document.getElementById('variation-report-modal');
     if (!modal) {
-      console.warn('[variation-report] modal element missing — HTML may be stale. Registering placeholder.');
+      console.warn('[variation-report] modal element missing — HTML may be stale.');
       window.__openVariationReport = () => {
         alert('The report UI is out of sync with the page — please reload (Cmd+Shift+R or Ctrl+Shift+R) to pick up the latest HTML.');
       };
       return;
     }
-    const nameEl     = modal.querySelector('#vr-opening-name');
+    const selectEl   = modal.querySelector('#vr-opening-select');
     const statsEl    = modal.querySelector('#vr-stats');
     const treeEl     = modal.querySelector('#vr-tree');
     const btnClose   = modal.querySelector('#vr-close');
     const btnPGN     = modal.querySelector('#vr-download-pgn');
+    const btnPrint   = modal.querySelector('#vr-print');
     const btnReset   = modal.querySelector('#vr-reset');
 
     let _currentOpening = null;
     let _currentEntries = [];
+    let _currentTree    = [];    // ECO-shaped tree (array of root nodes)
+    let _openingsList   = [];    // dropdown options
 
     function close() { modal.hidden = true; }
     btnClose.addEventListener('click', close);
     modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
 
-    // Build a move string from a UCI by replaying from `fen`, so we can
-    // show "3.Nf3" rather than the bare UCI "g1f3".
+    // Helpers ---------------------------------------------------------
     function uciToSan(fen, uci) {
       try {
         const c = new Chess(fen);
@@ -8481,8 +8483,14 @@ async function main() {
         return m ? m.san : uci;
       } catch { return uci; }
     }
+    function applyMove(fen, uci) {
+      try {
+        const c = new Chess(fen);
+        const m = c.move({ from: uci.slice(0,2), to: uci.slice(2,4), promotion: uci.length > 4 ? uci[4] : undefined });
+        return m ? c.fen() : null;
+      } catch { return null; }
+    }
     function plyNumberFromFen(fen) {
-      // Convert fullmove + side-to-move → ply number (1-indexed).
       try {
         const parts = fen.split(' ');
         const fullmove = +parts[5] || 1;
@@ -8509,39 +8517,105 @@ async function main() {
       return (v >= 0 ? '+' : '') + v.toFixed(2);
     }
 
-    function render() {
+    // Build an ECO tree by grouping entries by FEN and walking forward.
+    // Each node: { fen, uci, san, times, last_played, children[] }.
+    // Returns array of root-level nodes (distinct first-fork positions).
+    function buildEcoTree(entries) {
+      const byFen = new Map();
+      for (const e of entries) {
+        if (!byFen.has(e.fen)) byFen.set(e.fen, []);
+        byFen.get(e.fen).push(e);
+      }
+      // Sort each FEN's moves by times_played desc so most-played
+      // variations appear first.
+      for (const arr of byFen.values()) {
+        arr.sort((a, b) => (b.times_played || 0) - (a.times_played || 0));
+      }
+      // Find root FENs — ones that aren't reached by applying any
+      // recorded move from another FEN. Safer: find the FEN with the
+      // smallest ply number among those present.
+      const allFens = new Set(entries.map(e => e.fen));
+      const reachedFens = new Set();
+      for (const e of entries) {
+        const next = applyMove(e.fen, e.uci);
+        if (next) reachedFens.add(next);
+      }
+      const rootFens = [...allFens].filter(f => !reachedFens.has(f));
+      if (rootFens.length === 0 && allFens.size > 0) {
+        // Pick lowest-ply as root fallback.
+        rootFens.push([...allFens].sort((a, b) => plyNumberFromFen(a) - plyNumberFromFen(b))[0]);
+      }
+      function walk(fen, depth, visited) {
+        if (visited.has(fen)) return [];
+        visited.add(fen);
+        const moves = byFen.get(fen) || [];
+        return moves.map(m => {
+          const nextFen = applyMove(fen, m.uci);
+          return {
+            fen: m.fen,
+            uci: m.uci,
+            nextFen,
+            san: uciToSan(fen, m.uci),
+            times: m.times_played || 1,
+            last_played: m.last_played,
+            depth,
+            children: nextFen ? walk(nextFen, depth + 1, new Set(visited)) : [],
+          };
+        });
+      }
+      const roots = [];
+      for (const rf of rootFens) roots.push(...walk(rf, 0, new Set()));
+      return roots;
+    }
+
+    // Flatten the tree into printable rows with ASCII tree connectors.
+    function renderTree() {
       if (!_currentEntries.length) {
-        treeEl.innerHTML = '<div class="vr-empty">No variation plays recorded for this opening yet. Enable variation mode and practice a few games.</div>';
+        treeEl.innerHTML = '<div class="vr-empty">No variations recorded yet. Enable variation mode and practice a few games.</div>';
         statsEl.textContent = '';
         return;
       }
-      const totalPlays = _currentEntries.reduce((s, e) => s + (e.times_played || 1), 0);
-      statsEl.textContent = `${_currentEntries.length} distinct line${_currentEntries.length === 1 ? '' : 's'} · ${totalPlays} total plays`;
-
-      const rows = _currentEntries.map(e => {
-        const san = uciToSan(e.fen, e.uci);
-        const ply = plyNumberFromFen(e.fen);
+      const rows = [];
+      function emit(node, prefix, isLast, siblingCount) {
+        const connector = prefix === ''
+          ? ''
+          : (isLast ? '└─ ' : '├─ ');
+        const ply = plyNumberFromFen(node.fen);
         const full = Math.ceil(ply / 2);
-        const moveNum = (ply % 2 === 1) ? `${full}.` : `${full}…`;
-        const cached = fenEvalCache.get(e.fen) || {};
-        return `<div class="vr-line" data-fen="${escHtml(e.fen)}" data-uci="${escHtml(e.uci)}">
-          <span class="vr-moves">${moveNum} <b>${escHtml(san)}</b></span>
-          <span class="vr-count">${e.times_played || 1}×</span>
-          <span class="vr-eval" data-fen="${escHtml(e.fen)}">${fmtEval(cached.cpWhite, cached.mate)}</span>
-          <span class="vr-date">${fmtRelDate(e.last_played)}</span>
-        </div>`;
-      });
+        const moveNum = (ply % 2 === 1) ? `${full}.`  : `${full}…`;
+        const cached = fenEvalCache.get(node.nextFen || node.fen) || {};
+        const evalStr = fmtEval(cached.cpWhite, cached.mate);
+        const indent = prefix + connector;
+        rows.push(`<div class="vr-node" data-fen="${escHtml(node.fen)}" data-uci="${escHtml(node.uci)}">
+          <span class="vr-moves">${escHtml(indent)}${moveNum} <b>${escHtml(node.san)}</b></span>
+          <span class="vr-count">${node.times}×</span>
+          <span class="vr-eval" data-next-fen="${escHtml(node.nextFen || node.fen)}">${evalStr}</span>
+          <span class="vr-date">${fmtRelDate(node.last_played)}</span>
+        </div>`);
+        // Recurse into children.
+        const n = node.children.length;
+        node.children.forEach((child, i) => {
+          const childPrefix = prefix + (prefix === '' ? '   ' : (isLast ? '    ' : '│   '));
+          emit(child, childPrefix, i === n - 1, n);
+        });
+      }
+      for (let i = 0; i < _currentTree.length; i++) {
+        emit(_currentTree[i], '', i === _currentTree.length - 1, _currentTree.length);
+      }
       treeEl.innerHTML = rows.join('');
 
-      // Wire clicks: load position on the board.
-      treeEl.querySelectorAll('.vr-line').forEach(el => {
+      // Click a row → load the AFTER-move position on the board.
+      treeEl.querySelectorAll('.vr-node').forEach(el => {
         el.addEventListener('click', () => {
-          const fen = el.dataset.fen;
+          const fromFen = el.dataset.fen;
+          const uci = el.dataset.uci;
+          const nextFen = applyMove(fromFen, uci);
+          if (!nextFen) return;
           try {
-            board.chess.load(fen);
-            board.startingFen = fen;
-            board.tree = new (board.tree.constructor)(fen);
-            board.cg.set({ fen, turnColor: board.chess.turn() === 'w' ? 'white' : 'black' });
+            board.chess.load(nextFen);
+            board.startingFen = nextFen;
+            board.tree = new (board.tree.constructor)(nextFen);
+            board.cg.set({ fen: nextFen, turnColor: board.chess.turn() === 'w' ? 'white' : 'black' });
             board.dispatchEvent(new CustomEvent('new-game'));
             close();
           } catch (err) {
@@ -8549,53 +8623,74 @@ async function main() {
           }
         });
       });
+
+      const totalPlays = _currentEntries.reduce((s, e) => s + (e.times_played || 1), 0);
+      const opMeta = _openingsList.find(o => o.opening_name === _currentOpening);
+      const ecoStr = opMeta?.opening_eco ? ` · ${opMeta.opening_eco}` : '';
+      statsEl.innerHTML = `<strong>${escHtml(_currentOpening)}</strong>${escHtml(ecoStr)} · ${_currentEntries.length} distinct line${_currentEntries.length === 1 ? '' : 's'} · ${totalPlays} total deviations`;
     }
 
     async function probeEvalsInBackground() {
-      // Fill in Stockfish evals for any lines we don't have cached.
-      // Runs sequentially at depth 14 so the report populates as
-      // positions get evaluated. User sees '—' until each probe fires.
       for (const e of _currentEntries) {
-        if (fenEvalCache.has(e.fen)) continue;
+        const nextFen = applyMove(e.fen, e.uci);
+        if (!nextFen) continue;
+        if (fenEvalCache.has(nextFen)) continue;
         try {
-          await AICoach.probeEngine(engine, e.fen, 14, 1, 0);
-          // Update the row in place if the modal is still open.
+          await AICoach.probeEngine(engine, nextFen, 14, 1, 0);
           if (modal.hidden) return;
-          const row = treeEl.querySelector(`.vr-eval[data-fen="${CSS.escape(e.fen)}"]`);
-          if (row) {
-            const cached = fenEvalCache.get(e.fen) || {};
-            row.textContent = fmtEval(cached.cpWhite, cached.mate);
+          const el = treeEl.querySelector(`.vr-eval[data-next-fen="${CSS.escape(nextFen)}"]`);
+          if (el) {
+            const cached = fenEvalCache.get(nextFen) || {};
+            el.textContent = fmtEval(cached.cpWhite, cached.mate);
           }
         } catch (err) {
-          console.warn('[vr] probe failed', e.fen, err);
+          console.warn('[vr] probe failed', nextFen, err);
         }
       }
     }
 
-    async function open(openingName) {
-      if (!openingName) {
-        alert('Start a practice game with an opening first, then come back to view its report.');
-        return;
-      }
+    async function loadAndRender(openingName) {
       _currentOpening = openingName;
-      nameEl.textContent = openingName + (window.__practiceLastOpEco ? ` · ${window.__practiceLastOpEco}` : '');
-      modal.hidden = false;
       treeEl.innerHTML = '<div class="vr-empty">Loading…</div>';
-      statsEl.textContent = '';
       try {
         _currentEntries = await OpeningVariation.openingReport(openingName);
+        _currentTree = buildEcoTree(_currentEntries);
       } catch (err) {
+        _currentEntries = []; _currentTree = [];
         treeEl.innerHTML = `<div class="vr-empty">Load failed: ${escHtml(err.message || String(err))}</div>`;
         return;
       }
-      render();
-      // Kick off eval probes (fire-and-forget).
+      renderTree();
       probeEvalsInBackground();
+    }
+
+    async function open(preselectOpeningName) {
+      modal.hidden = false;
+      statsEl.textContent = 'Loading openings…';
+      treeEl.innerHTML = '';
+      try {
+        _openingsList = await OpeningVariation.listOpenings();
+      } catch { _openingsList = []; }
+      if (!_openingsList.length) {
+        statsEl.textContent = '';
+        treeEl.innerHTML = '<div class="vr-empty">No variations recorded yet. Enable variation mode and practice a few games.</div>';
+        selectEl.innerHTML = '';
+        return;
+      }
+      // Populate dropdown.
+      selectEl.innerHTML = _openingsList.map(o =>
+        `<option value="${escHtml(o.opening_name)}">${escHtml(o.opening_name)}${o.opening_eco ? ' · ' + escHtml(o.opening_eco) : ''} · ${o.distinct_lines} lines</option>`
+      ).join('');
+      // Pick the preselected opening if we have it, otherwise the first.
+      const match = preselectOpeningName && _openingsList.find(o => o.opening_name === preselectOpeningName);
+      selectEl.value = match ? preselectOpeningName : _openingsList[0].opening_name;
+      await loadAndRender(selectEl.value);
     }
     window.__openVariationReport = open;
 
-    // PGN export — one mainline "game" per distinct line played, with
-    // the opening's starting moves prefixed (if we can reconstruct).
+    selectEl.addEventListener('change', () => loadAndRender(selectEl.value));
+
+    // PGN export — flattens the tree, one [Event] per recorded branch.
     btnPGN.addEventListener('click', () => {
       if (!_currentEntries.length) { alert('Nothing to export.'); return; }
       const lines = _currentEntries.map(e => {
@@ -8603,7 +8698,8 @@ async function main() {
         const ply = plyNumberFromFen(e.fen);
         const full = Math.ceil(ply / 2);
         const prefix = (ply % 2 === 1) ? `${full}.` : `${full}...`;
-        const cached = fenEvalCache.get(e.fen) || {};
+        const nextFen = applyMove(e.fen, e.uci);
+        const cached = fenEvalCache.get(nextFen || e.fen) || {};
         const evalStr = fmtEval(cached.cpWhite, cached.mate);
         return `[Event "${_currentOpening} variation"]\n[FEN "${e.fen}"]\n[Result "*"]\n[VariationPlayed "${e.times_played}×"]\n[LastPlayed "${e.last_played || '?'}"]\n[Eval "${evalStr}"]\n\n${prefix} ${san} *\n`;
       }).join('\n\n');
@@ -8616,14 +8712,27 @@ async function main() {
       URL.revokeObjectURL(url);
     });
 
-    // Reset from inside the report modal (same confirm-gate).
+    // Print / save as PDF. Browser's print dialog has a "Save as PDF"
+    // destination on all major platforms. The @media print CSS in
+    // panels.css hides everything except the modal.
+    btnPrint.addEventListener('click', () => {
+      try { window.print(); }
+      catch (err) { alert('Print failed: ' + (err.message || err)); }
+    });
+
     btnReset.addEventListener('click', async () => {
       if (!_currentOpening) return;
       if (!confirm(`Forget all ${_currentEntries.length} variation${_currentEntries.length === 1 ? '' : 's'} played in "${_currentOpening}"? You'll start fresh next time.`)) return;
       try {
         await OpeningVariation.resetOpeningMemory(_currentOpening);
-        _currentEntries = [];
-        render();
+        _currentEntries = []; _currentTree = [];
+        renderTree();
+        // Also refresh the dropdown in case this was the only data.
+        _openingsList = await OpeningVariation.listOpenings();
+        if (!_openingsList.length) {
+          selectEl.innerHTML = '';
+          treeEl.innerHTML = '<div class="vr-empty">All variations cleared.</div>';
+        }
       } catch (err) {
         alert('Reset failed: ' + (err.message || err));
       }

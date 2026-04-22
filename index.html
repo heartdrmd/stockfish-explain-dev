@@ -1351,15 +1351,22 @@
     </div>
   </div>
 
-  <!-- 📊 Variation report modal — tree of lines played per opening. -->
+  <!-- 📊 Variation report modal — ECO-tree of lines played per opening.
+       Dropdown lets the user switch between openings they've drilled.
+       Print button triggers window.print() with a stylesheet scoped
+       to the modal only. -->
   <div id="variation-report-modal" class="modal" hidden>
-    <div class="modal-card" style="max-width:720px;">
+    <div class="modal-card vr-card" style="max-width:720px;">
       <button class="modal-close" id="vr-close" aria-label="Close">×</button>
-      <h3 style="margin-top:0;">📊 Variation report — <span id="vr-opening-name">—</span></h3>
-      <div id="vr-stats" class="muted" style="font-size:12px;margin-bottom:12px;">—</div>
-      <div id="vr-tree" class="vr-tree" style="max-height:50vh;overflow-y:auto;font-family:var(--font-san);font-size:14px;"></div>
+      <div class="vr-header">
+        <h3 style="margin:0;">📊 Variation report</h3>
+        <select id="vr-opening-select" class="tourn-select" style="max-width:260px;"></select>
+      </div>
+      <div id="vr-stats" class="muted" style="font-size:12px;margin:8px 0 12px;">—</div>
+      <div id="vr-tree" class="vr-tree-eco"></div>
       <div class="vs-footer" style="margin-top:12px;">
-        <button type="button" id="vr-download-pgn" class="btn">💾 Download all lines as PGN</button>
+        <button type="button" id="vr-download-pgn" class="btn">💾 PGN</button>
+        <button type="button" id="vr-print"        class="btn">🖨 Print / PDF</button>
         <span style="flex:1;"></span>
         <button type="button" id="vr-reset" class="btn vs-btn-danger">🔁 Reset this opening</button>
       </div>

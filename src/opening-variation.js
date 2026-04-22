@@ -235,6 +235,41 @@ export async function resetOpeningMemory(openingName) {
   return true;
 }
 
+// List every opening the current user has variation memory for.
+// Returns [{ opening_name, opening_eco, total_plays, distinct_lines, last_played }]
+// sorted by last_played desc. For guests, derives the same shape
+// from localStorage.
+export async function listOpenings() {
+  if (isLoggedIn()) {
+    try {
+      const r = await fetch('/api/variations/openings', { credentials: 'include' });
+      if (!r.ok) return [];
+      const j = await r.json();
+      return j.openings || [];
+    } catch { return []; }
+  }
+  const mem = loadGuestMemory();
+  const bucket = new Map();
+  for (const fen of Object.keys(mem)) {
+    for (const uci of Object.keys(mem[fen])) {
+      const e = mem[fen][uci];
+      const name = e?.opName || '(unknown)';
+      if (!bucket.has(name)) bucket.set(name, {
+        opening_name: name,
+        opening_eco:  e?.opEco || null,
+        total_plays:  0,
+        distinct_lines: 0,
+        last_played: null,
+      });
+      const b = bucket.get(name);
+      b.total_plays += e.times || 1;
+      b.distinct_lines += 1;
+      if (!b.last_played || (e.at && e.at > b.last_played)) b.last_played = e.at;
+    }
+  }
+  return [...bucket.values()].sort((a, b) => (b.last_played || '').localeCompare(a.last_played || ''));
+}
+
 export async function openingReport(openingName) {
   if (isLoggedIn()) {
     try {

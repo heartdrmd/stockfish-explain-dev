@@ -3434,33 +3434,75 @@ body.practice-mode.practice-thinking .ceval::after {
 }
 #vs-late-row[hidden] { display: none !important; }
 
-/* Variation report tree */
-.vr-tree {
+/* Variation report — ECO-tree layout with header + opening dropdown */
+.vr-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.vr-tree-eco {
+  max-height: 55vh;
+  overflow-y: auto;
   background: rgba(0,0,0,0.2);
   border: 1px solid var(--c-border, rgba(255,255,255,0.06));
   border-radius: 6px;
   padding: 10px 14px;
+  font-family: var(--font-san);
+  font-size: 14px;
 }
-.vr-line {
-  padding: 5px 6px;
-  border-radius: 4px;
-  cursor: pointer;
+.vr-node {
   display: grid;
   grid-template-columns: 1fr auto auto auto;
   gap: 10px;
-  align-items: center;
+  align-items: baseline;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
   transition: background 0.06s;
-  border-bottom: 1px solid rgba(255,255,255,0.03);
 }
-.vr-line:hover { background: rgba(255,255,255,0.05); }
-.vr-moves { font-variant-numeric: tabular-nums; }
-.vr-moves b { font-weight: 700; }
-.vr-count, .vr-eval, .vr-date {
+.vr-node:hover { background: rgba(255,255,255,0.05); }
+.vr-node .vr-moves {
+  font-variant-numeric: tabular-nums;
+  white-space: pre;         /* preserve indent whitespace */
+}
+.vr-node .vr-moves b { font-weight: 700; }
+.vr-node .vr-count,
+.vr-node .vr-eval,
+.vr-node .vr-date {
   font-size: 11px;
   color: var(--c-font-dimmer, rgba(255,255,255,0.5));
   font-variant-numeric: tabular-nums;
 }
-.vr-count { min-width: 40px; text-align: right; }
-.vr-eval  { min-width: 50px; text-align: right; }
-.vr-date  { min-width: 70px; text-align: right; }
-.vr-empty { padding: 20px; text-align: center; color: var(--c-font-dimmer); }
+.vr-node .vr-count { min-width: 40px; text-align: right; }
+.vr-node .vr-eval  { min-width: 50px; text-align: right; }
+.vr-node .vr-date  { min-width: 70px; text-align: right; }
+.vr-empty { padding: 30px 20px; text-align: center; color: var(--c-font-dimmer); }
+
+/* Print / Save-as-PDF — show only the report modal on white paper */
+@media print {
+  body > * { visibility: hidden !important; }
+  #variation-report-modal,
+  #variation-report-modal * { visibility: visible !important; }
+  #variation-report-modal {
+    position: absolute; top: 0; left: 0; right: 0;
+    background: #fff !important;
+    color: #000 !important;
+  }
+  #variation-report-modal .modal-card {
+    max-width: none !important; width: 100% !important;
+    box-shadow: none !important; border: none !important;
+    background: #fff !important; color: #000 !important;
+  }
+  #variation-report-modal .vr-tree-eco {
+    background: #fff !important; color: #000 !important;
+    border-color: #ccc !important; max-height: none !important;
+  }
+  #variation-report-modal .vr-node { color: #000 !important; }
+  #variation-report-modal .vr-node .vr-count,
+  #variation-report-modal .vr-node .vr-eval,
+  #variation-report-modal .vr-node .vr-date { color: #555 !important; }
+  #vr-close, #vr-print, #vr-download-pgn, #vr-reset, #vr-opening-select,
+  .vs-footer { display: none !important; }
+}

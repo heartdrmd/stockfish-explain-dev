@@ -85,6 +85,29 @@ export function wireVariations(app) {
     }
   });
 
+  // ── list all openings the user has variation memory for ────────
+  //    Used by the report modal's opening dropdown.
+  app.get('/api/variations/openings', requireAuth, async (req, res) => {
+    try {
+      const { rows } = await query(
+        `SELECT opening_name,
+                MAX(opening_eco)            AS opening_eco,
+                SUM(times_played)::int      AS total_plays,
+                COUNT(*)::int               AS distinct_lines,
+                MAX(last_played)            AS last_played
+           FROM variation_memory
+          WHERE user_id = $1 AND opening_name IS NOT NULL
+          GROUP BY opening_name
+          ORDER BY MAX(last_played) DESC`,
+        [req.user.id]
+      );
+      res.json({ openings: rows });
+    } catch (err) {
+      console.error('[variations] GET openings failed', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── scoped reset: wipe memory for one opening ───────────────────
   app.delete('/api/variations/opening/:name', requireAuth, async (req, res) => {
     try {
