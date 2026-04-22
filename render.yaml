@@ -1,10 +1,11 @@
 databases:
   # Postgres for multi-user game archives, mistakes, SRS, favourites.
-  # Starter plan is $7/mo (0.5 GB storage, 97 connection limit). More
-  # than enough for a friend-group: ~10 KB/game × 1000 games = 10 MB
-  # per user. Swap to 'basic' ($12) if we hit the storage cap later.
+  # `basic-256mb` plan (~$6/mo, 256 MB RAM, 1 GB storage). Render
+  # deprecated the legacy `starter` plan for new databases in late
+  # 2024 — `basic-256mb` is the direct replacement. More than enough
+  # for a friend-group dev site: ~10 KB/game × 1000 games = 10 MB.
   - name: stockfish-explain-dev-db
-    plan: starter
+    plan: basic-256mb
     region: ohio
     databaseName: stockfish_explain_dev
     user: stockfish_explain_dev
