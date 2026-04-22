@@ -142,6 +142,31 @@ const migrations = [
       );
     `,
   },
+  {
+    // Anti-repetition memory for the opening-variation practice mode.
+    // When the engine picks a non-#1 candidate at an opening fork, we
+    // record (user_id, fen, uci) → times_played so repeat drills at
+    // the same FEN favour less-explored moves. opening_name lets us
+    // scope "reset memory for THIS opening" without deleting the
+    // whole user's history.
+    name: '008_variation_memory',
+    sql: `
+      CREATE TABLE IF NOT EXISTS variation_memory (
+        user_id       INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        fen           TEXT NOT NULL,
+        uci           TEXT NOT NULL,
+        opening_name  TEXT,              -- nullable; labels for scoped reset + report
+        opening_eco   TEXT,
+        times_played  INT NOT NULL DEFAULT 1,
+        last_played   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, fen, uci)
+      );
+      CREATE INDEX IF NOT EXISTS idx_variation_memory_user_opening
+        ON variation_memory(user_id, opening_name);
+      CREATE INDEX IF NOT EXISTS idx_variation_memory_user_fen
+        ON variation_memory(user_id, fen);
+    `,
+  },
 ];
 
 export async function runMigrations() {

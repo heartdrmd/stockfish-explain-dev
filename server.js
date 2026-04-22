@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { runMigrations, dbEnabled } from './src/server/db.js';
 import { wireAuth } from './src/server/auth.js';
 import { wireGames } from './src/server/games.js';
+import { wireVariations } from './src/server/variations.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT       = Number(process.env.PORT || 8000);
@@ -216,6 +217,7 @@ app.post('/api/ai', async (req, res) => {
 // /api/auth/* and /api/games/* hit the JSON endpoints, not static.
 wireAuth(app);
 wireGames(app);
+wireVariations(app);
 
 // ───── static site ─────
 // Served after the API routes so /api/* takes precedence.
