@@ -278,17 +278,30 @@ body.nav-collapsed .site-header { min-height: 40px; padding: 6px 14px; }
   }
 }
 
-/* ── Desktop: lock board in view during practice (play + post-game review).
-   Same intent as the mobile rule below (mobile-mode block) — user's
-   primary reference point is the board; scrolling the page to read the
-   move list or coach tabs shouldn't lose it.
-   Stays sticky for the WHOLE practice lifecycle (live play AND post-game
-   analysis), since desktop has room for both. Released only when the
-   user starts a brand-new session (practice-mode is cleared).
-   Covers the .eval-gauge too so the value bar tracks the board. */
+/* ── Desktop: lock board + engine analysis in view during practice
+   (play + post-game review). Same intent as the mobile rule below —
+   user's primary reference points are the board and the engine's
+   current score/depth/PV; scrolling the page to read the move list
+   or coach tabs shouldn't lose either of them.
+
+   Pinned elements (all at the same `top:` so they line up in a
+   stable row across columns):
+     .board-area      — the chessground wrap itself
+     .eval-gauge      — value bar sitting between board and tools
+     .tools > .ceval  — engine score / depth / PV
+
+   Within the .tools column, .ceval is the ONLY child we sticky.
+   The move list / coach tabs / eval timeline / pawn strip all scroll
+   past it like a newsfeed, exactly what the user wants during review.
+
+   Stays sticky for the WHOLE practice lifecycle (live play AND
+   post-game analysis). Released only when practice-mode is cleared.
+   Desktop-only: mobile has its own rule that releases sticky after
+   the game ends (small screens can't afford board + ceval pinned). */
 @media (min-width: 800px), (orientation: landscape) and (min-width: 560px) {
   body.practice-mode:not(.mobile-mode) .uniboard .board-area,
-  body.practice-mode:not(.mobile-mode) .uniboard .eval-gauge {
+  body.practice-mode:not(.mobile-mode) .uniboard .eval-gauge,
+  body.practice-mode:not(.mobile-mode) .uniboard .tools > .ceval {
     position: sticky;
     /* .site-header is position:sticky with min-height 60px (40 when
        the toolbar is collapsed). Offset just below it + a small gap. */
@@ -297,8 +310,15 @@ body.nav-collapsed .site-header { min-height: 40px; padding: 6px 14px; }
     z-index: 30;         /* above scrolled tools, below modals/header */
   }
   body.practice-mode.nav-collapsed:not(.mobile-mode) .uniboard .board-area,
-  body.practice-mode.nav-collapsed:not(.mobile-mode) .uniboard .eval-gauge {
+  body.practice-mode.nav-collapsed:not(.mobile-mode) .uniboard .eval-gauge,
+  body.practice-mode.nav-collapsed:not(.mobile-mode) .uniboard .tools > .ceval {
     top: 48px;
+  }
+  /* Small visual seam under the sticky ceval so the scrolling move
+     list underneath doesn't appear to bleed into the engine panel. */
+  body.practice-mode:not(.mobile-mode) .uniboard .tools > .ceval {
+    background: var(--c-bg);
+    box-shadow: 0 4px 8px -4px rgba(0,0,0,0.45);
   }
 }
 
