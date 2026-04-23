@@ -459,7 +459,19 @@ body.nav-collapsed .site-header { min-height: 40px; padding: 6px 14px; }
      playing. During an active game, pin the board-area sticky under
      the fixed clock bar so it can't be scrolled away. Released once
      the game ends (.practice-finished) so the user can explore
-     analysis panels freely. */
+     analysis panels freely.
+
+     Grid containers gate sticky to the grid cell in many browsers —
+     the cell is only as tall as the board, so sticky has nothing to
+     travel across. Flatten to a flex column during live play so the
+     sticky containing block is the whole .uniboard height (= whole
+     page scroll). This is the fix for the "board still scrolls off
+     screen" bug from v1 of this rule. */
+  body.mobile-mode.practice-mode:not(.practice-finished) .uniboard {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
   body.mobile-mode.practice-mode:not(.practice-finished) .uniboard .board-area {
     position: sticky;
     /* Keep below the ~40 px fixed clock bar at the top. env() handles
@@ -471,6 +483,8 @@ body.nav-collapsed .site-header { min-height: 40px; padding: 6px 14px; }
        board never eats more than ~60% of the screen — leaves room
        for the controls underneath even in landscape. */
     max-width: min(100vw, 60vh);
+    /* Center the board in the flex-column container. */
+    align-self: center;
     padding-bottom: 4px;
     /* Soft shadow below the sticky board so content scrolling under
        it visually passes behind, not bumps into an edge. */

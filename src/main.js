@@ -4989,6 +4989,12 @@ async function main() {
         new MutationObserver(() => { if (pModal.hidden) hideBar(); })
           .observe(pModal, { attributes: true, attributeFilter: ['hidden'] });
       }
+      // Game-start dismissal: when a practice game begins, the body
+      // gains .practice-mode. Preview bar has no business lingering
+      // over the live board — watch for that class and hide.
+      new MutationObserver(() => {
+        if (document.body.classList.contains('practice-mode')) hideBar();
+      }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
     })();
 
     if (pSearch) {
