@@ -4481,11 +4481,17 @@ async function main() {
       const reason = entry._reason
         ? `<span class="tree-leaf-reason">${escapeHtml(entry._reason)}</span>`
         : '';
+      // Mobile preview button (P). Visible ONLY on touch devices via
+      // CSS @media (hover:none); desktop users already get hover
+      // previews so the button is hidden there. Tapping it shows the
+      // mobile preview bar at the bottom of the page.
+      const previewBtn = `<button type="button" class="tree-leaf-preview" data-preview-key="${entry.key}" title="Preview (P)">P</button>`;
       leaf.innerHTML =
         `<span class="tree-leaf-fav${starred ? ' starred' : ''}" data-fav="${entry.key}" title="${starred ? 'Unstar' : 'Star as favourite'}">${starred ? '★' : '☆'}</span>` +
         queueCb +
         sideChooser +
         quickPlay +
+        previewBtn +
         `<span class="tree-leaf-name">${escapeHtml(leafName)}${reason}</span>` +
         `<span class="tree-leaf-eco">${escapeHtml(entry.o.eco || '')}</span>` +
         badge + custom;
@@ -4911,6 +4917,77 @@ async function main() {
           if (!to || !pTree.contains(to)) hideHover();
         });
         pTree.addEventListener('scroll', hideHover, { passive: true });
+      }
+    })();
+
+    // ─── Mobile preview bar ─────────────────────────────────────────
+    // Mobile-only. Desktop uses the hover popup above. The P button
+    // on each leaf opens this bar (fixed to bottom, ~1/5 viewport).
+    // Tap the bar itself, tap another row, close button, scroll, or
+    // modal-close all dismiss it.
+    (() => {
+      const bar      = document.getElementById('mobile-preview-bar');
+      const boardEl  = document.getElementById('mobile-preview-board');
+      const nameEl   = document.getElementById('mobile-preview-name');
+      const movesEl  = document.getElementById('mobile-preview-moves');
+      const closeBtn = document.getElementById('mobile-preview-close');
+      if (!bar || !pTree) return;
+
+      function hideBar() { bar.hidden = true; }
+      function showBarFor(leaf) {
+        // Resolve FEN — either the precomputed dataset.previewFen or
+        // replay the SAN sequence.
+        let fen = leaf.dataset.previewFen || '';
+        if (!fen) {
+          const sanMoves = (leaf.dataset.movesSan || '').split(/\s+/).filter(Boolean);
+          try {
+            const c = new Chess();
+            for (const s of sanMoves) if (!c.move(s)) break;
+            fen = c.fen();
+          } catch { fen = new Chess().fen(); }
+        } else {
+          try { new Chess(fen); } catch { fen = new Chess().fen(); }
+        }
+        // Size: fit the board to ~18vh so the whole bar sits in ~22vh.
+        // Clamped so very small phones don't render an unreadable board
+        // and tablets don't waste a quarter of the screen on it.
+        const vh = window.innerHeight || 600;
+        const boardPx = Math.max(140, Math.min(240, Math.round(vh * 0.18)));
+        const squarePx = Math.floor(boardPx / 8);
+        boardEl.innerHTML = previewBoardSvg(fen, { squarePx });
+        const nameNode = leaf.querySelector('.tree-leaf-name');
+        const ecoNode  = leaf.querySelector('.tree-leaf-eco');
+        nameEl.textContent = nameNode?.textContent?.trim() || '';
+        const sans = (leaf.dataset.movesSan || '').trim();
+        movesEl.textContent = [sans, ecoNode?.textContent?.trim()].filter(Boolean).join(' · ');
+        bar.hidden = false;
+      }
+
+      // Click delegation on the tree — P button opens, any other tap
+      // on a leaf hides the bar so a preview doesn't linger when the
+      // user moves on.
+      pTree.addEventListener('click', (ev) => {
+        const pBtn = ev.target.closest('.tree-leaf-preview');
+        if (pBtn) {
+          ev.stopPropagation();
+          ev.preventDefault();
+          const leaf = pBtn.closest('.tree-leaf');
+          if (leaf) showBarFor(leaf);
+          return;
+        }
+        // Any other click inside the tree = dismiss the bar (but let
+        // the normal leaf-select handler further below do its thing).
+        if (!bar.hidden) hideBar();
+      }, true);  // capture phase so this runs before the leaf-select handler
+      // Tap the bar itself = dismiss.
+      bar.addEventListener('click', hideBar);
+      closeBtn?.addEventListener('click', (ev) => { ev.stopPropagation(); hideBar(); });
+      // Scrolling the list or closing the modal also dismisses.
+      pTree.addEventListener('scroll', hideBar, { passive: true });
+      const pModal = document.getElementById('practice-modal');
+      if (pModal) {
+        new MutationObserver(() => { if (pModal.hidden) hideBar(); })
+          .observe(pModal, { attributes: true, attributeFilter: ['hidden'] });
       }
     })();
 

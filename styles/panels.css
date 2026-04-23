@@ -2778,6 +2778,23 @@ body.practice-mode .practice-card[hidden]       { display: none !important; }
   box-shadow: 0 0 0 2px rgba(78,201,176,0.55);
 }
 
+/* Mobile-only "P" preview button per leaf. Hidden on desktop (hover
+   popup covers that case); shown on touch devices. JS in main.js
+   opens the #mobile-preview-bar when tapped. */
+.practice-opening-tree .tree-leaf-preview {
+  display: none;    /* desktop default: hidden */
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 10px;
+  margin: 0 4px;
+  border: 1px solid var(--c-border);
+  background: var(--c-bg-low);
+  color: var(--c-font-dim);
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+
 /* ── Mobile / touch-only: bigger hit targets ─────────────────────────
    Apple HIG + Material both want ~44 px touch targets. Our favourite-
    star + W/B/↔ side-pick + play-now quick-launcher squares are all
@@ -2821,6 +2838,88 @@ body.practice-mode .practice-card[hidden]       { display: none !important; }
     padding: 6px 10px;
     margin-left: 6px;
   }
+  /* Preview button (P) — visible on touch devices only. Sized to
+     match the other thumb-sized targets nearby. */
+  .practice-opening-tree .tree-leaf-preview {
+    display: inline-block;
+    font-size: 14px;
+    padding: 8px 14px;
+    margin: 0 6px;
+  }
+  .practice-opening-tree .tree-leaf-preview:active {
+    background: var(--c-primary, #3692e7);
+    color: #fff;
+    border-color: var(--c-primary, #3692e7);
+  }
+}
+
+/* Mobile preview bar — fixed at bottom of viewport. Shown when the
+   user taps a leaf's P button. Dimensions are tuned so the bar takes
+   roughly 1/5 of mobile viewport height, leaving the rest of the
+   practice modal visible above it. */
+.mobile-preview-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10002;    /* above the practice modal (which uses < 10000) */
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #1a1a1a;
+  border-top: 2px solid var(--c-primary, #3692e7);
+  box-shadow: 0 -8px 20px rgba(0,0,0,0.6);
+  cursor: pointer;       /* tap anywhere dismisses */
+}
+.mobile-preview-board {
+  flex-shrink: 0;
+}
+.mobile-preview-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--c-font, #e6e6e6);
+  position: relative;
+}
+.mobile-preview-name {
+  font-weight: 700;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mobile-preview-moves {
+  font-size: 11px;
+  color: var(--c-font-dim, rgba(255,255,255,0.55));
+  font-family: var(--font-mono, ui-monospace, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mobile-preview-close {
+  position: absolute;
+  top: -6px;
+  right: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.2);
+  background: rgba(0,0,0,0.4);
+  color: #fff;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+/* Desktop: hide the bar entirely (defence in depth — JS also won't
+   open it there since the P button is hidden). */
+@media (hover: hover) and (pointer: fine) {
+  .mobile-preview-bar { display: none !important; }
 }
 
 .practice-opening-tree .tree-leaf-del {

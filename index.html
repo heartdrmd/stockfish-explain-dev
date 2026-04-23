@@ -787,6 +787,19 @@
     </div>
   </div>
 
+  <!-- Mobile position preview bar. Fixed to the bottom of the viewport,
+       ~1/5 of viewport height. Only rendered on touch devices (desktop
+       uses the hover popup instead). Opened by tapping a row's P button,
+       dismissed by tapping the bar itself or any other row. -->
+  <div id="mobile-preview-bar" class="mobile-preview-bar" hidden>
+    <div class="mobile-preview-board" id="mobile-preview-board"></div>
+    <div class="mobile-preview-meta">
+      <div class="mobile-preview-name" id="mobile-preview-name"></div>
+      <div class="mobile-preview-moves" id="mobile-preview-moves"></div>
+      <button type="button" class="mobile-preview-close" id="mobile-preview-close" aria-label="Close preview">×</button>
+    </div>
+  </div>
+
   <!-- Save-as-practice-opening modal — small modal triggered from the
        sidebar "Save as practice opening" button. Lets the user name
        the custom variation and place it under an existing group or a
