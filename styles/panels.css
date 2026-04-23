@@ -3592,6 +3592,16 @@ body.in-variation-fork .ceval-variation-badge {
 .vr-eco-white { border-bottom: none; }
 .vr-eco-black td { border-top: none; }
 
+/* Intermediate-leaf annotation on a cell — indicates a shorter
+   recorded line ended here, absorbed into this column's continuation.
+   Small + dim + slightly orange-tinted so it reads as a footnote. */
+.vr-eco-cell-annot {
+  font-size: 10px;
+  color: #e39a5c;
+  font-weight: 600;
+  margin-left: 2px;
+}
+
 /* Legacy entries section at the bottom */
 .vr-eco-legacy {
   margin-top: 18px;

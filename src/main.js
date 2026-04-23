@@ -8724,21 +8724,59 @@ async function main() {
         return;
       }
 
-      // Build lines = [{ ucis, times, last_played }] from entries with
-      // prefix_moves. Legacy entries (no prefix_moves) go into a flat
-      // fallback section at the bottom.
-      const lines = [];
+      // Build lines from entries — but FIRST merge into a trie so we
+      // can absorb "prefix-leaves" (lines that end partway through a
+      // longer line) into their continuation. Only PURE LEAVES (trie
+      // nodes with no children) become columns. Intermediate leaves
+      // are remembered as annotations on the containing column's cell.
       const legacy = [];
+      const trieRoot = { children: new Map() };
       for (const e of _currentEntries) {
-        if (e.prefix_moves != null && e.prefix_moves !== undefined) {
-          const prefUcis = e.prefix_moves ? e.prefix_moves.split(/\s+/).filter(Boolean) : [];
+        if (e.prefix_moves == null || e.prefix_moves === undefined) {
+          legacy.push(e); continue;
+        }
+        const ucis = [
+          ...(e.prefix_moves ? e.prefix_moves.split(/\s+/).filter(Boolean) : []),
+          e.uci,
+        ];
+        let node = trieRoot;
+        for (const u of ucis) {
+          if (!node.children.has(u)) node.children.set(u, { children: new Map() });
+          node = node.children.get(u);
+        }
+        if (!node.leaf) node.leaf = { times: 0, last_played: '' };
+        node.leaf.times += (e.times_played || 1);
+        if ((e.last_played || '') > node.leaf.last_played) node.leaf.last_played = e.last_played || '';
+      }
+      // Enumerate pure leaves (trie nodes with no children). Each
+      // becomes one column.
+      const lines = [];
+      (function walkTrie(node, path) {
+        if (node.children.size === 0) {
           lines.push({
-            ucis: [...prefUcis, e.uci],
-            times: e.times_played || 1,
-            last_played: e.last_played,
+            ucis: [...path],
+            times: node.leaf ? node.leaf.times : 0,
+            last_played: node.leaf ? node.leaf.last_played : '',
           });
-        } else {
-          legacy.push(e);
+          return;
+        }
+        for (const [u, child] of node.children) walkTrie(child, [...path, u]);
+      })(trieRoot, []);
+      // For each pure-leaf column, walk its path through the trie and
+      // record any intermediate leaves (games that ended partway).
+      // These show as small "(Nx ended here)" annotations on the cell.
+      for (const line of lines) {
+        line.intermediateLeaves = new Map();   // plyIndex → { times, last_played }
+        let node = trieRoot;
+        for (let i = 0; i < line.ucis.length; i++) {
+          node = node.children.get(line.ucis[i]);
+          if (!node) break;
+          if (node.leaf && i < line.ucis.length - 1) {
+            line.intermediateLeaves.set(i, {
+              times: node.leaf.times,
+              last_played: node.leaf.last_played,
+            });
+          }
         }
       }
 
@@ -8818,17 +8856,31 @@ async function main() {
           // If divergence is at black's move, white cell is empty for
           // the first row of that move number.
           for (const l of lines) {
-            const wSan = (absPly % 2 === 0 && i < l.sans.length) ? l.sans[i] : '';
-            const wFen = (absPly % 2 === 0 && i < l.fensAfter.length) ? l.fensAfter[i] : '';
-            whiteCells.push({ san: wSan, fen: wFen });
-            const bOffset = (absPly % 2 === 0) ? i + 1 : i;
-            const bSan = (bOffset < l.sans.length) ? l.sans[bOffset] : '';
-            const bFen = (bOffset < l.fensAfter.length) ? l.fensAfter[bOffset] : '';
-            blackCells.push({ san: bSan, fen: bFen });
+            const wSansIdx = (absPly % 2 === 0) ? i : null;
+            const wSan = (wSansIdx != null && wSansIdx < l.sans.length) ? l.sans[wSansIdx] : '';
+            const wFen = (wSansIdx != null && wSansIdx < l.fensAfter.length) ? l.fensAfter[wSansIdx] : '';
+            whiteCells.push({ san: wSan, fen: wFen, line: l, sansIdx: wSansIdx });
+            const bSansIdx = (absPly % 2 === 0) ? i + 1 : i;
+            const bSan = (bSansIdx < l.sans.length) ? l.sans[bSansIdx] : '';
+            const bFen = (bSansIdx < l.fensAfter.length) ? l.fensAfter[bSansIdx] : '';
+            blackCells.push({ san: bSan, fen: bFen, line: l, sansIdx: bSansIdx });
           }
-          const cellHtml = (c) => c.fen
-            ? `<td class="vr-eco-cell" data-fen="${escHtml(c.fen)}">${escHtml(c.san)}</td>`
-            : `<td class="vr-eco-cell vr-eco-empty">${escHtml(c.san)}</td>`;
+          const cellHtml = (c) => {
+            if (!c.san) return '<td class="vr-eco-cell vr-eco-empty"></td>';
+            // Intermediate-leaf annotation: if this cell's ply is a
+            // place where an absorbed shorter line ENDED, show the
+            // count next to the move (e.g. "d4 (1×)" = "1 game ended
+            // right here").
+            const ucisIdx = c.sansIdx != null ? common + c.sansIdx : -1;
+            const inter = c.line?.intermediateLeaves?.get(ucisIdx);
+            const annot = inter
+              ? ` <span class="vr-eco-cell-annot" title="${inter.times}× ended here">(${inter.times}×)</span>`
+              : '';
+            if (c.fen) {
+              return `<td class="vr-eco-cell" data-fen="${escHtml(c.fen)}">${escHtml(c.san)}${annot}</td>`;
+            }
+            return `<td class="vr-eco-cell vr-eco-empty">${escHtml(c.san)}${annot}</td>`;
+          };
           bodyRows.push(`<tr class="vr-eco-white">
             <th class="vr-eco-rowlabel" rowspan="2">${fullMoveNum}</th>
             ${whiteCells.map(cellHtml).join('')}
