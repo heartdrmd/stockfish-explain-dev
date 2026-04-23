@@ -798,6 +798,14 @@ async function main() {
   // would 404 — so disable them in the dropdown and show the user where to
   // download them.
   const isPagesHost = /\.github\.io$/i.test(location.hostname);
+  // Detect mobile devices (phone / tablet). Used to default mobile users
+  // to the 13 MB `lite` engine instead of the 108 MB `avrukh` one. Saves
+  // ~95 MB on first cold-load over cellular, and sidesteps a WASM-init
+  // flake we see on iOS Safari for the bigger nets. Mobile users who
+  // WANT avrukh can still pick it from the toolbar — this only affects
+  // the initial default, and a user's manual pick persists in
+  // localStorage so they never get nagged back to lite.
+  const IS_MOBILE = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
   // Default to the last-used engine flavor (persisted) if it still exists
   // in the dropdown AND is valid in this environment. Otherwise fall back
@@ -806,12 +814,18 @@ async function main() {
   const savedFlavor = localStorage.getItem(FLAVOR_STORAGE);
   const flavorOptions = [...ui.selectFlavor.querySelectorAll('option')].map(o => o.value);
   const flavorValid = savedFlavor && flavorOptions.includes(savedFlavor);
-  // Default: Avrukh 108 MT when threadable (user-confirmed as the
-  // smoothest/strongest variant). Falls back to lite on Pages host
-  // (no custom binaries there) and avrukh-single if no threads.
-  let currentFlavor = flavorValid
-    ? savedFlavor
-    : (threadable ? (isPagesHost ? 'lite' : 'avrukh') : 'avrukh-single');
+  // Default picker (only used when no persisted choice exists):
+  //   desktop, threadable, not Pages      → avrukh (108 MB, strongest)
+  //   mobile, threadable, not Pages       → lite    (13 MB, fast first-load)
+  //   anywhere threadable on Pages host   → lite    (full-net not bundled)
+  //   no threads, mobile                  → lite-single
+  //   no threads, desktop                 → avrukh-single
+  function pickDefaultFlavor() {
+    if (isPagesHost) return 'lite';
+    if (threadable)  return IS_MOBILE ? 'lite'        : 'avrukh';
+    return               IS_MOBILE ? 'lite-single' : 'avrukh-single';
+  }
+  let currentFlavor = flavorValid ? savedFlavor : pickDefaultFlavor();
   ui.selectFlavor.value = currentFlavor;
 
   // Disable multi-thread flavors if the page isn't cross-origin-isolated
@@ -924,10 +938,11 @@ async function main() {
       // Auto-fallback chain: on crash/timeout, walk a priority list
       // of safer flavors until one works. Stops as soon as a flavor
       // boots — doesn't loop forever if every flavor is broken.
-      // Order: Avrukh (user's preferred default) → lite MT → lite ST.
-      const fallbackChain = threadable
-        ? ['avrukh', 'lite', 'lite-single']
-        : ['avrukh-single', 'lite-single'];
+      //   desktop: Avrukh (preferred) → lite MT → lite ST.
+      //   mobile:  lite MT → lite ST   (skip the 108 MB download).
+      const fallbackChain = IS_MOBILE
+        ? (threadable ? ['lite', 'lite-single'] : ['lite-single'])
+        : (threadable ? ['avrukh', 'lite', 'lite-single'] : ['avrukh-single', 'lite-single']);
       const nextFlavor = fallbackChain.find(f => f !== flavor);
       if ((isTimeout || isCrash) && nextFlavor) {
         localStorage.removeItem(FLAVOR_STORAGE);
@@ -953,7 +968,13 @@ async function main() {
           }
           if (typeof window.__wireEngineCaptureListeners === 'function')
             window.__wireEngineCaptureListeners(engine);
-          try { await bootEngine('lite-single'); } catch {}
+          // DIRECT warmup — bypass bootEngine() so a warmup failure
+          // (iOS Safari WASM flake) does NOT re-enter the fallback
+          // catch handler. Without this guard, each warmup crash
+          // recursed into bootEngine → catch → warmup → crash → …
+          // producing hundreds of error logs in under a second.
+          try { await engine.boot({ flavor: 'lite-single' }); }
+          catch (e) { console.warn('[engine] warmup skipped (lite-single crashed):', e.message || e); }
           await new Promise(r => setTimeout(r, 200));
           try { engine.terminate?.(); } catch {}
         }
@@ -1116,8 +1137,11 @@ async function main() {
       explainer.engine = engine;
       explainer.wire();
       wireEngineCaptureListeners(engine);
-      try { await bootEngine('lite-single'); } catch (e) {
-        console.warn('[engine] ritual warmup failed', e);
+      // DIRECT warmup — see note at the other site. Bypass bootEngine
+      // so a warmup crash (iOS Safari WASM flake) doesn't re-enter
+      // the fallback chain and cascade into hundreds of retries.
+      try { await engine.boot({ flavor: 'lite-single' }); } catch (e) {
+        console.warn('[engine] ritual warmup failed (continuing):', e.message || e);
       }
       // Let the ST worker produce a few info lines before we kill
       // it — user's manual ritual has seconds of actual engine work
