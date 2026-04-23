@@ -407,4 +407,29 @@ body.nav-collapsed .site-header { min-height: 40px; padding: 6px 14px; }
   body.mobile-mode.mobile-drawer-collapsed #heat-map,
   body.mobile-mode.mobile-drawer-collapsed .move-list-wrap,
   body.mobile-mode.mobile-drawer-collapsed .tabbed { display: none; }
+
+  /* ── Lock the board into view during a LIVE practice game ──────
+     On mobile portrait, the page stacks board → tools → side. If
+     the user scrolls down to read the move list or coach output,
+     the board goes off-screen — you lose your anchor to what you're
+     playing. During an active game, pin the board-area sticky under
+     the fixed clock bar so it can't be scrolled away. Released once
+     the game ends (.practice-finished) so the user can explore
+     analysis panels freely. */
+  body.mobile-mode.practice-mode:not(.practice-finished) .uniboard .board-area {
+    position: sticky;
+    /* Keep below the ~40 px fixed clock bar at the top. env() handles
+       notched phones cleanly when the clock sits below the notch. */
+    top: calc(48px + env(safe-area-inset-top, 0px));
+    z-index: 40;     /* under the clock (100) + modals, over tools */
+    background: var(--c-bg);
+    /* Cap the BOARD-AREA width by viewport HEIGHT so the square
+       board never eats more than ~60% of the screen — leaves room
+       for the controls underneath even in landscape. */
+    max-width: min(100vw, 60vh);
+    padding-bottom: 4px;
+    /* Soft shadow below the sticky board so content scrolling under
+       it visually passes behind, not bumps into an edge. */
+    box-shadow: 0 6px 10px -6px rgba(0,0,0,0.55);
+  }
 }
