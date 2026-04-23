@@ -3592,6 +3592,54 @@ body.in-variation-fork .ceval-variation-badge {
 .vr-eco-white { border-bottom: none; }
 .vr-eco-black td { border-top: none; }
 
+/* Horizontal ECO-book lines: each recorded variation is one row of
+   moves reading left-to-right, with a small numeric label and a
+   times/date stamp at the right. Inspired by printed opening books. */
+.vr-eco-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0;
+  font-family: var(--font-san);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.vr-eco-line {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border-bottom: 1px dotted rgba(255,255,255,0.06);
+}
+.vr-eco-line:hover { background: rgba(255,255,255,0.02); }
+.vr-eco-line-num {
+  color: var(--c-font-dimmer, rgba(255,255,255,0.5));
+  font-weight: 700;
+  text-align: right;
+  font-size: 12px;
+}
+.vr-eco-line-moves {
+  line-height: 1.5;
+  word-spacing: 2px;
+}
+.vr-eco-line-meta {
+  color: var(--c-font-dimmer, rgba(255,255,255,0.45));
+  font-size: 11px;
+  white-space: nowrap;
+}
+.vr-eco-move {
+  cursor: pointer;
+  padding: 1px 3px;
+  border-radius: 3px;
+  transition: background 0.06s, color 0.06s;
+}
+.vr-eco-move:hover {
+  background: var(--c-primary, #3692e7);
+  color: #fff;
+}
+
 /* Intermediate-leaf annotation on a cell — indicates a shorter
    recorded line ended here, absorbed into this column's continuation.
    Small + dim + slightly orange-tinted so it reads as a footnote. */

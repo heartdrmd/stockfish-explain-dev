@@ -8829,8 +8829,6 @@ async function main() {
         // Sort by times desc, then last_played desc.
         lines.sort((a, b) => (b.times - a.times) || ((b.last_played || '').localeCompare(a.last_played || '')));
 
-        const maxTail = Math.max(...lines.map(l => l.sans.length));
-
         // Header: opening title + shared prefix moves in SAN.
         const opMeta = _openingsList.find(o => o.opening_name === _currentOpening);
         const ecoStr = opMeta?.opening_eco || '';
@@ -8840,81 +8838,53 @@ async function main() {
           return (i % 2 === 0) ? `${full}.${s}` : s;
         }).join(' ');
 
-        // Build the table body. Two HTML rows per full-move number —
-        // first white, second black. The move-number <th> spans both
-        // via rowspan=2. First row anchors from the divergence ply.
-        const bodyRows = [];
-        let i = 0;  // halfmove offset from divergence
-        let absPly = divergencePly;
-        while (i < maxTail) {
-          const fullMoveNum = Math.floor(absPly / 2) + 1;
-          const whiteCells = [];
-          const blackCells = [];
-          // Figure out if absPly is a white ply (even) or black (odd).
-          const whiteIdx = (absPly % 2 === 0) ? i : i + 1;
-          const blackIdx = (absPly % 2 === 0) ? i + 1 : i;
-          // If divergence is at black's move, white cell is empty for
-          // the first row of that move number.
-          for (const l of lines) {
-            const wSansIdx = (absPly % 2 === 0) ? i : null;
-            const wSan = (wSansIdx != null && wSansIdx < l.sans.length) ? l.sans[wSansIdx] : '';
-            const wFen = (wSansIdx != null && wSansIdx < l.fensAfter.length) ? l.fensAfter[wSansIdx] : '';
-            whiteCells.push({ san: wSan, fen: wFen, line: l, sansIdx: wSansIdx });
-            const bSansIdx = (absPly % 2 === 0) ? i + 1 : i;
-            const bSan = (bSansIdx < l.sans.length) ? l.sans[bSansIdx] : '';
-            const bFen = (bSansIdx < l.fensAfter.length) ? l.fensAfter[bSansIdx] : '';
-            blackCells.push({ san: bSan, fen: bFen, line: l, sansIdx: bSansIdx });
+        // Render each line as a HORIZONTAL row of moves, with any
+        // absorbed intermediate leaves shown as indented "↳ also"
+        // sub-rows below the parent line — standard ECO-tree shape.
+        // Each move is clickable (loads that position on the board).
+        function sansToHtml(line) {
+          // Build "Nm. Wm Bm Nm+1. Wm Bm" with absPly awareness.
+          const parts = [];
+          for (let k = 0; k < line.sans.length; k++) {
+            const ply = divergencePly + k;
+            const full = Math.floor(ply / 2) + 1;
+            // White move: prepend "N." ; black move: prepend "N..." only
+            // when this is the FIRST shown move of a line that starts on
+            // black (otherwise skip the black-number marker).
+            const isWhite = (ply % 2 === 0);
+            let prefix = '';
+            if (isWhite)            prefix = `${full}.`;
+            else if (k === 0)       prefix = `${full}…`;
+            const fen = line.fensAfter[k];
+            const cellAttrs = fen ? `data-fen="${escHtml(fen)}"` : '';
+            // Intermediate-leaf annotation: if a shorter line ended
+            // exactly on this move, add a small (N×) hint.
+            const ucisIdx = common + k;
+            const inter = line.intermediateLeaves?.get(ucisIdx);
+            const annot = inter ? ` <span class="vr-eco-cell-annot" title="${inter.times}× ended here">(${inter.times}×)</span>` : '';
+            parts.push(`<span class="vr-eco-move" ${cellAttrs}>${prefix}${escHtml(line.sans[k])}${annot}</span>`);
           }
-          const cellHtml = (c) => {
-            if (!c.san) return '<td class="vr-eco-cell vr-eco-empty"></td>';
-            // Intermediate-leaf annotation: if this cell's ply is a
-            // place where an absorbed shorter line ENDED, show the
-            // count next to the move (e.g. "d4 (1×)" = "1 game ended
-            // right here").
-            const ucisIdx = c.sansIdx != null ? common + c.sansIdx : -1;
-            const inter = c.line?.intermediateLeaves?.get(ucisIdx);
-            const annot = inter
-              ? ` <span class="vr-eco-cell-annot" title="${inter.times}× ended here">(${inter.times}×)</span>`
-              : '';
-            if (c.fen) {
-              return `<td class="vr-eco-cell" data-fen="${escHtml(c.fen)}">${escHtml(c.san)}${annot}</td>`;
-            }
-            return `<td class="vr-eco-cell vr-eco-empty">${escHtml(c.san)}${annot}</td>`;
-          };
-          bodyRows.push(`<tr class="vr-eco-white">
-            <th class="vr-eco-rowlabel" rowspan="2">${fullMoveNum}</th>
-            ${whiteCells.map(cellHtml).join('')}
-          </tr>`);
-          bodyRows.push(`<tr class="vr-eco-black">
-            ${blackCells.map(cellHtml).join('')}
-          </tr>`);
-          // Advance: if we started on white, advance 2; if started on
-          // black (first iteration only), advance 1 to align next row
-          // on white.
-          if (absPly % 2 === 0) { i += 2; absPly += 2; }
-          else                  { i += 1; absPly += 1; }
+          return parts.join(' ');
         }
 
-        // Column header metadata: variation number + times + date.
-        const colHeaders = lines.map((l, idx) =>
-          `<th class="vr-eco-col-num">${idx + 1}</th>`
-        ).join('');
-        const colMeta = lines.map(l =>
-          `<th class="vr-eco-col-meta">${l.times}× · ${fmtRelDate(l.last_played)}</th>`
-        ).join('');
+        // Main rows = one per pure-leaf line, horizontal moves + meta.
+        const lineRows = lines.map((l, idx) => {
+          const meta = `<span class="vr-eco-line-meta">${l.times}× · ${fmtRelDate(l.last_played)}</span>`;
+          return `<div class="vr-eco-line" data-idx="${idx + 1}">
+            <span class="vr-eco-line-num">${idx + 1}.</span>
+            <span class="vr-eco-line-moves">${sansToHtml(l)}</span>
+            ${meta}
+          </div>`;
+        }).join('');
 
         treeEl.innerHTML = `
           <div class="vr-eco-title">
             <div class="vr-eco-name">${escHtml(titleStr.toUpperCase())}${ecoStr ? ` <span class="vr-eco-code">${escHtml(ecoStr)}</span>` : ''}</div>
             ${prefixStr ? `<div class="vr-eco-opening">${escHtml(prefixStr)}</div>` : ''}
           </div>
-          <table class="vr-eco-table">
-            <thead>
-              <tr><th></th>${colHeaders}</tr>
-              <tr><th></th>${colMeta}</tr>
-            </thead>
-            <tbody>${bodyRows.join('')}</tbody>
-          </table>
+          <div class="vr-eco-lines">
+            ${lineRows}
+          </div>
           ${legacy.length ? `<div class="vr-eco-legacy"><h4>Legacy entries (no prefix recorded)</h4>${legacyHtml(legacy)}</div>` : ''}
         `;
       }
