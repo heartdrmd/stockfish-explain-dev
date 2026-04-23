@@ -163,6 +163,12 @@
            side so they're visually separated from the setup/analysis actions. -->
       <span class="nav-spacer"></span>
       <button id="btn-flip"   class="btn"       title="Flip board (F)">⇅ Flip</button>
+      <!-- Resign / Draw shortcuts. Mirror the side-card buttons but
+           live in the top toolbar so they're always reachable. Hidden
+           when no practice game is live (visibility is synced to
+           #practice-live via a MutationObserver in main.js). -->
+      <button id="btn-resign-shortcut" class="btn resign-btn" title="Resign (R)" hidden>🏳 R</button>
+      <button id="btn-draw-shortcut"   class="btn draw-btn"   title="Offer draw (D)" hidden>🤝 D</button>
       <button id="btn-pause"  class="btn"       title="Pause/resume engine analysis">⏸ Pause</button>
       <button id="btn-lock"   class="btn"       title="Lock engine OFF — no analysis until unlocked">🔓 Engine</button>
 
@@ -347,7 +353,8 @@
             <button id="btn-dont-save"      class="practice-btn" title="Delete the auto-saved copy from the cloud — the local archive entry is untouched" hidden>🗑 Don't save</button>
             <button id="btn-download-games" class="practice-btn" title="Download all your saved games as a single PGN file, optionally by date range">📥 Download games</button>
             <button id="btn-practice-next-fav" class="practice-btn again-btn" title="Start another practice game with a random favourite opening (using your last settings)" hidden>⏭ Next random favourite</button>
-            <button id="btn-practice-again" class="practice-btn again-btn" title="Start another PRACTICE game against the engine (opens practice modal)">🎯 New practice game</button>
+            <button id="btn-practice-again" class="practice-btn again-btn" title="Replay this SAME opening with the same strength / colour / clock — one click, no picker">🔁 Same opening again</button>
+            <button id="btn-practice-different" class="practice-btn again-btn" title="Open the picker to start practice with a DIFFERENT opening">🎯 Different opening</button>
           </div>
         </div>
       </div>

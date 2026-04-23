@@ -4007,6 +4007,8 @@ async function main() {
           <kbd>g</kbd><span></span><span>Toggle eval graph</span>
           <kbd>m</kbd><span></span><span>Open My Games</span>
           <kbd>c</kbd><span></span><span>Toggle practice coach</span>
+          <kbd>r</kbd><span></span><span>Resign (practice game only)</span>
+          <kbd>d</kbd><span></span><span>Offer draw (practice game only)</span>
           <kbd>Shift+L</kbd><span></span><span>Star/unstar current opening</span>
           <kbd>?</kbd><span></span><span>Show / hide this help</span>
           <kbd>Esc</kbd><span></span><span>Close overlays</span>
@@ -5640,7 +5642,11 @@ async function main() {
     if (document.body.classList.contains('practice-finished')) return;
     document.body.classList.add('practice-finished');
     document.body.classList.remove('practice-thinking');
-    if (!prevNavCollapsed) document.body.classList.remove('nav-collapsed');
+    // Restore toolbar expansion after the game — BUT on mobile there's
+    // barely room for it, so leave it collapsed even if the user had
+    // it expanded before. Desktop keeps the old "restore if they had
+    // it open pre-game" behaviour.
+    if (!prevNavCollapsed && !IS_MOBILE) document.body.classList.remove('nav-collapsed');
     try { OpeningVariation.endSession(); } catch {}
     // Snapshot the game history NOW — frozen at game-end time. The
     // async sweep/verify/archive chain below uses this snapshot
@@ -5845,6 +5851,50 @@ async function main() {
     }
   });
 
+  // Toolbar shortcut mirrors for resign + draw (🏳 R / 🤝 D, next to
+  // Flip). Click proxies into the side-card buttons so all existing
+  // confirm/probe logic runs unchanged. Visibility is synced to the
+  // side-card's #practice-live via a MutationObserver so the toolbar
+  // buttons appear exactly when a practice game is in progress.
+  {
+    const toolResign = document.getElementById('btn-resign-shortcut');
+    const toolDraw   = document.getElementById('btn-draw-shortcut');
+    const liveEl     = document.getElementById('practice-live');
+    if (toolResign && btnResign) toolResign.addEventListener('click', () => btnResign.click());
+    if (toolDraw   && btnDraw)   toolDraw.addEventListener('click', () => btnDraw.click());
+    if (liveEl && (toolResign || toolDraw)) {
+      const sync = () => {
+        const visible = !liveEl.hidden && liveEl.offsetParent !== null;
+        if (toolResign) toolResign.hidden = !visible;
+        if (toolDraw)   toolDraw.hidden   = !visible;
+      };
+      sync();
+      const mo = new MutationObserver(sync);
+      mo.observe(liveEl,                               { attributes: true, attributeFilter: ['hidden', 'style', 'class'] });
+      // Also watch the parent card (practice-actions) because it's the
+      // outer hidden gate — practice-live may "not be hidden" while
+      // its parent still is. We need BOTH visible for the shortcuts.
+      const pActionsEl = document.getElementById('practice-actions');
+      if (pActionsEl) mo.observe(pActionsEl,           { attributes: true, attributeFilter: ['hidden', 'style', 'class'] });
+    }
+    // Keyboard shortcuts: r/R = resign, d = draw. Only fire when the
+    // toolbar mirrors are visible (= practice-live showing). Skipped
+    // when typing in an input. Shift+D stays reserved for the existing
+    // board-input debug toggle.
+    document.addEventListener('keydown', (e) => {
+      const tag = (e.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const practiceLive = !!(toolResign && !toolResign.hidden) || !!(toolDraw && !toolDraw.hidden);
+      if (!practiceLive) return;
+      if (e.key === 'r' || e.key === 'R') {
+        if (toolResign) { toolResign.click(); e.preventDefault(); }
+      } else if (e.key === 'd' && !e.shiftKey) {  // Shift+D = existing debug toggle
+        if (toolDraw) { toolDraw.click(); e.preventDefault(); }
+      }
+    });
+  }
+
   // Save PGN — download the current game with the recorded result
   // tag. Reuses the existing tree.pgn() machinery.
   const btnPracticeSave = document.getElementById('btn-practice-save');
@@ -5899,6 +5949,14 @@ async function main() {
     }
     // No history → fall back to the picker.
     if (practiceBtn) practiceBtn.click();
+  });
+
+  // "🎯 Different opening" — explicit picker entry from the post-game
+  // card for when the user wants to switch the opening (complements
+  // the "🔁 Same opening again" button which replays last settings).
+  const btnPracticeDifferent = document.getElementById('btn-practice-different');
+  if (btnPracticeDifferent) btnPracticeDifferent.addEventListener('click', () => {
+    document.getElementById('btn-practice')?.click();
   });
 
   // "⏭ Next random favourite" — rotates to a new random favourite

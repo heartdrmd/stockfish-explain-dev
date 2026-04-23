@@ -1823,6 +1823,14 @@ body.practice-mode .practice-card[hidden]       { display: none !important; }
 .practice-btn.draw-btn:hover   { background: rgba(255,193,7,0.15);  border-color: #ffc107; }
 .practice-btn.save-btn:hover   { background: rgba(82,196,26,0.15);  border-color: #52c41a; }
 .practice-btn.again-btn:hover  { background: rgba(122,167,255,0.15); border-color: var(--c-accent, #7aa7ff); }
+
+/* Toolbar shortcut mirrors of resign/draw (live next to Flip). Small
+   tinted borders so they stand out as a color-coded pair without
+   shouting. Hidden state is controlled by [hidden] in main.js. */
+#btn-resign-shortcut { border-color: rgba(220,53,69,0.5); color: #ff8a95; }
+#btn-draw-shortcut   { border-color: rgba(255,193,7,0.5); color: #ffd45b; }
+#btn-resign-shortcut:hover { background: rgba(220,53,69,0.18); border-color: #dc3545; color: #fff; }
+#btn-draw-shortcut:hover   { background: rgba(255,193,7,0.18); border-color: #ffc107; color: #fff; }
 .practice-result {
   margin: 0 0 6px;
   font-weight: 700;
@@ -2768,6 +2776,51 @@ body.practice-mode .practice-card[hidden]       { display: none !important; }
 .practice-opening-tree .play-now:hover {
   transform: scale(1.2);
   box-shadow: 0 0 0 2px rgba(78,201,176,0.55);
+}
+
+/* ── Mobile / touch-only: bigger hit targets ─────────────────────────
+   Apple HIG + Material both want ~44 px touch targets. Our favourite-
+   star + W/B/↔ side-pick + play-now quick-launcher squares are all
+   ~10-14 px which is fine with a mouse but impossible with a thumb.
+   `(hover: none) and (pointer: coarse)` cleanly targets phones + tablets
+   without catching narrow desktop windows. */
+@media (hover: none) and (pointer: coarse) {
+  .practice-opening-tree .tree-leaf-fav {
+    font-size: 20px;
+    padding: 6px 10px;
+    opacity: 0.75;
+  }
+  .practice-opening-tree .tree-leaf-side {
+    gap: 6px;
+    margin-right: 8px;
+  }
+  .practice-opening-tree .side-pick {
+    font-size: 14px;
+    padding: 8px 12px;
+    min-width: 32px;
+    line-height: 1.1;
+  }
+  .practice-opening-tree .tree-leaf-play {
+    gap: 10px;
+    margin: 0 8px 0 4px;
+  }
+  .practice-opening-tree .play-now {
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+  }
+  /* Add extra vertical breathing room per leaf so fat-fingered taps
+     land on the right row. */
+  .practice-opening-tree .tree-leaf {
+    padding: 6px 4px;
+    min-height: 40px;
+  }
+  /* Delete-custom (🗑) — also a thumb-size button on mobile. */
+  .practice-opening-tree .tree-leaf-del {
+    font-size: 16px;
+    padding: 6px 10px;
+    margin-left: 6px;
+  }
 }
 
 .practice-opening-tree .tree-leaf-del {
