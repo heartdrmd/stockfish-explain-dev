@@ -278,6 +278,30 @@ body.nav-collapsed .site-header { min-height: 40px; padding: 6px 14px; }
   }
 }
 
+/* ── Desktop: lock board in view during practice (play + post-game review).
+   Same intent as the mobile rule below (mobile-mode block) — user's
+   primary reference point is the board; scrolling the page to read the
+   move list or coach tabs shouldn't lose it.
+   Stays sticky for the WHOLE practice lifecycle (live play AND post-game
+   analysis), since desktop has room for both. Released only when the
+   user starts a brand-new session (practice-mode is cleared).
+   Covers the .eval-gauge too so the value bar tracks the board. */
+@media (min-width: 800px), (orientation: landscape) and (min-width: 560px) {
+  body.practice-mode:not(.mobile-mode) .uniboard .board-area,
+  body.practice-mode:not(.mobile-mode) .uniboard .eval-gauge {
+    position: sticky;
+    /* .site-header is position:sticky with min-height 60px (40 when
+       the toolbar is collapsed). Offset just below it + a small gap. */
+    top: 68px;
+    align-self: start;   /* grid cells stretch by default; start for sticky */
+    z-index: 30;         /* above scrolled tools, below modals/header */
+  }
+  body.practice-mode.nav-collapsed:not(.mobile-mode) .uniboard .board-area,
+  body.practice-mode.nav-collapsed:not(.mobile-mode) .uniboard .eval-gauge {
+    top: 48px;
+  }
+}
+
 /* Side column cards */
 .side { display: flex; flex-direction: column; gap: 10px; }
 .side-card {
