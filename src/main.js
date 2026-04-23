@@ -21,6 +21,7 @@ import * as OpeningExplorer        from './opening_explorer.js';
 import { renderOpeningBlock, renderOpeningForAI, detectOpening } from './openings_book.js';
 import { LICHESS_OPENINGS } from './openings_lichess.js';
 import { OPENING_ALIASES } from './openings_aliases.js';
+import * as EcoLookup from './eco-lookup.js';
 
 // ─── Module-scoped alias cache ─────────────────────────────────────
 // WeakMap persists across every renderTree() call so alias lookups
@@ -8712,12 +8713,16 @@ async function main() {
       return tree;
     }
 
-    // Render the variation memory as a chess-book-style ECO table:
-    //   - Shared opening (common move prefix across all lines) at top
-    //   - Numbered variation columns
-    //   - Rows keyed by full-move number, two rows per move (white/black)
-    //   - Click any cell → load that position on the board
-    function renderTree() {
+    // Render the variation memory as a chess-book-style ECO tree:
+    //   - Shared opening prefix at top
+    //   - Lines grouped under a "family" heading (first named opening past
+    //     the shared prefix, e.g. "Berlin Defense", "Schliemann")
+    //   - Each line shows its deepest-named sub-variation + horizontal moves
+    //   - Click any move → load that position on the board
+    //
+    // Names + ECO codes come from the @hayatbiralem/eco.json dataset loaded
+    // by src/eco-lookup.js (lazy fetched once from /assets/eco/).
+    async function renderTree() {
       if (!_currentEntries.length) {
         treeEl.innerHTML = '<div class="vr-empty">No variations recorded yet. Enable variation mode and practice a few games.</div>';
         statsEl.textContent = '';
@@ -8838,27 +8843,47 @@ async function main() {
           return (i % 2 === 0) ? `${full}.${s}` : s;
         }).join(' ');
 
-        // Render each line as a HORIZONTAL row of moves, with any
-        // absorbed intermediate leaves shown as indented "↳ also"
-        // sub-rows below the parent line — standard ECO-tree shape.
-        // Each move is clickable (loads that position on the board).
+        // ── ECO-name decoration ──────────────────────────────────────
+        // Ensure the ECO name database is loaded. This is lazy — the first
+        // time the report opens it downloads ~600 KB (gzipped) from
+        // /assets/eco/. After that it's in memory for the session and
+        // HTTP-cached across reloads.
+        let ecoLoadError = null;
+        try { await EcoLookup.ensureLoaded(); }
+        catch (e) { ecoLoadError = e; }
+        // Build the shared-prefix FEN list so classifyLine can fall back
+        // to a prefix name when a line never reaches a named position
+        // in its own tail.
+        const prefixFens = [];
+        {
+          let pf = START_FEN;
+          for (let i = 0; i < common; i++) {
+            pf = applyMove(pf, lines[0].ucis[i]);
+            prefixFens.push(pf);
+          }
+        }
+        // Tag each line with family + leaf name entries.
+        for (const l of lines) {
+          // Pass the FULL fen list (prefix + tail) so classifyLine can
+          // look in the prefix too; family still prefers post-prefix.
+          const allFens = prefixFens.concat(l.fensAfter);
+          const { family, leaf } = EcoLookup.classifyLine(allFens, common);
+          l.family = family;
+          l.leaf   = leaf;
+        }
+
+        // Render each line as a HORIZONTAL row of moves. Clickable.
         function sansToHtml(line) {
-          // Build "Nm. Wm Bm Nm+1. Wm Bm" with absPly awareness.
           const parts = [];
           for (let k = 0; k < line.sans.length; k++) {
             const ply = divergencePly + k;
             const full = Math.floor(ply / 2) + 1;
-            // White move: prepend "N." ; black move: prepend "N..." only
-            // when this is the FIRST shown move of a line that starts on
-            // black (otherwise skip the black-number marker).
             const isWhite = (ply % 2 === 0);
             let prefix = '';
             if (isWhite)            prefix = `${full}.`;
             else if (k === 0)       prefix = `${full}…`;
             const fen = line.fensAfter[k];
             const cellAttrs = fen ? `data-fen="${escHtml(fen)}"` : '';
-            // Intermediate-leaf annotation: if a shorter line ended
-            // exactly on this move, add a small (N×) hint.
             const ucisIdx = common + k;
             const inter = line.intermediateLeaves?.get(ucisIdx);
             const annot = inter ? ` <span class="vr-eco-cell-annot" title="${inter.times}× ended here">(${inter.times}×)</span>` : '';
@@ -8867,23 +8892,82 @@ async function main() {
           return parts.join(' ');
         }
 
-        // Main rows = one per pure-leaf line, horizontal moves + meta.
-        const lineRows = lines.map((l, idx) => {
-          const meta = `<span class="vr-eco-line-meta">${l.times}× · ${fmtRelDate(l.last_played)}</span>`;
-          return `<div class="vr-eco-line" data-idx="${idx + 1}">
-            <span class="vr-eco-line-num">${idx + 1}.</span>
-            <span class="vr-eco-line-moves">${sansToHtml(l)}</span>
-            ${meta}
-          </div>`;
+        // ── Group lines by family name ──────────────────────────────
+        // Group key: family.entry.name (or "__unknown__" if no family).
+        // Preserve input order for tie-breaking; groups are then sorted
+        // by total times desc.
+        const groupMap = new Map();
+        for (const l of lines) {
+          const key = l.family?.entry?.name || '__unknown__';
+          if (!groupMap.has(key)) groupMap.set(key, { lines: [], family: l.family, totalTimes: 0 });
+          const g = groupMap.get(key);
+          g.lines.push(l);
+          g.totalTimes += l.times;
+        }
+        const groups = [...groupMap.values()];
+        groups.sort((a, b) => b.totalTimes - a.totalTimes);
+
+        // Helper: given a family name + a leaf name, return a short
+        // "sub-label" for the leaf — strip the family prefix if present
+        // so we display "Closed" rather than "Ruy Lopez: Morphy Defense, Closed".
+        function shortLeafLabel(familyName, leafName) {
+          if (!leafName) return '';
+          if (!familyName) return leafName;
+          if (leafName === familyName) return '';   // leaf is family itself
+          if (leafName.startsWith(familyName)) {
+            let s = leafName.slice(familyName.length);
+            s = s.replace(/^[\s:,\-]+/, '');        // trim leading punctuation
+            return s;
+          }
+          return leafName;
+        }
+
+        // Render each group.
+        const groupsHtml = groups.map((g, gIdx) => {
+          const famName = g.family?.entry?.name || 'Other variations';
+          const famEco  = g.family?.entry?.eco || '';
+          const gLines  = g.lines.slice().sort((a, b) =>
+            (b.times - a.times) || ((b.last_played || '').localeCompare(a.last_played || ''))
+          );
+          const lineRows = gLines.map((l, idx) => {
+            const sub = shortLeafLabel(famName, l.leaf?.entry?.name);
+            const subEco = l.leaf?.entry?.eco && l.leaf.entry.eco !== famEco ? l.leaf.entry.eco : '';
+            const label = sub
+              ? `<span class="vr-eco-line-sublabel">${escHtml(sub)}${subEco ? ` <span class="vr-eco-sub-eco">${escHtml(subEco)}</span>` : ''}</span>`
+              : '';
+            const meta = `<span class="vr-eco-line-meta">${l.times}× · ${fmtRelDate(l.last_played)}</span>`;
+            return `<div class="vr-eco-line" data-idx="${idx + 1}">
+              <span class="vr-eco-line-num">${idx + 1}.</span>
+              <span class="vr-eco-line-body">
+                ${label}
+                <span class="vr-eco-line-moves">${sansToHtml(l)}</span>
+              </span>
+              ${meta}
+            </div>`;
+          }).join('');
+          const groupSubtitle = `${g.lines.length} line${g.lines.length === 1 ? '' : 's'} · ${g.totalTimes}× total`;
+          return `<section class="vr-eco-group" data-gidx="${gIdx}">
+            <header class="vr-eco-group-header">
+              <span class="vr-eco-group-name">${escHtml(famName)}</span>
+              ${famEco ? `<span class="vr-eco-group-eco">${escHtml(famEco)}</span>` : ''}
+              <span class="vr-eco-group-count">${groupSubtitle}</span>
+            </header>
+            <div class="vr-eco-group-lines">${lineRows}</div>
+          </section>`;
         }).join('');
+
+        const ecoBanner = ecoLoadError
+          ? `<div class="vr-eco-banner" title="${escHtml(ecoLoadError.message || '')}">⚠ Opening database unavailable — showing unlabeled lines.</div>`
+          : '';
 
         treeEl.innerHTML = `
           <div class="vr-eco-title">
             <div class="vr-eco-name">${escHtml(titleStr.toUpperCase())}${ecoStr ? ` <span class="vr-eco-code">${escHtml(ecoStr)}</span>` : ''}</div>
             ${prefixStr ? `<div class="vr-eco-opening">${escHtml(prefixStr)}</div>` : ''}
           </div>
-          <div class="vr-eco-lines">
-            ${lineRows}
+          ${ecoBanner}
+          <div class="vr-eco-groups">
+            ${groupsHtml}
           </div>
           ${legacy.length ? `<div class="vr-eco-legacy"><h4>Legacy entries (no prefix recorded)</h4>${legacyHtml(legacy)}</div>` : ''}
         `;
@@ -8962,7 +9046,7 @@ async function main() {
         treeEl.innerHTML = `<div class="vr-empty">Load failed: ${escHtml(err.message || String(err))}</div>`;
         return;
       }
-      renderTree();
+      await renderTree();
       probeEvalsInBackground();
     }
 
@@ -8970,6 +9054,10 @@ async function main() {
       modal.hidden = false;
       statsEl.textContent = 'Loading openings…';
       treeEl.innerHTML = '';
+      // Kick off the ECO-name database fetch in parallel — renderTree
+      // will await it later, but starting here hides most of the latency
+      // behind the (usually slower) variation-list round-trip.
+      EcoLookup.ensureLoaded().catch(() => {});
       try {
         _openingsList = await OpeningVariation.listOpenings();
       } catch { _openingsList = []; }
@@ -9028,7 +9116,7 @@ async function main() {
       try {
         await OpeningVariation.resetOpeningMemory(_currentOpening);
         _currentEntries = []; _currentTree = [];
-        renderTree();
+        await renderTree();
         // Also refresh the dropdown in case this was the only data.
         _openingsList = await OpeningVariation.listOpenings();
         if (!_openingsList.length) {

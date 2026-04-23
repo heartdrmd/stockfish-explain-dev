@@ -3607,18 +3607,20 @@ body.in-variation-fork .ceval-variation-badge {
 .vr-eco-line {
   display: grid;
   grid-template-columns: 28px 1fr auto;
-  align-items: baseline;
+  align-items: start;
   gap: 10px;
   padding: 6px 8px;
   border-radius: 4px;
   border-bottom: 1px dotted rgba(255,255,255,0.06);
 }
+.vr-eco-line:last-child { border-bottom: none; }
 .vr-eco-line:hover { background: rgba(255,255,255,0.02); }
 .vr-eco-line-num {
   color: var(--c-font-dimmer, rgba(255,255,255,0.5));
   font-weight: 700;
   text-align: right;
   font-size: 12px;
+  padding-top: 1px;
 }
 .vr-eco-line-moves {
   line-height: 1.5;
@@ -3638,6 +3640,81 @@ body.in-variation-fork .ceval-variation-badge {
 .vr-eco-move:hover {
   background: var(--c-primary, #3692e7);
   color: #fff;
+}
+
+/* ── Family-grouped layout ─────────────────────────────────────────
+   Lines are bucketed by the first named opening past the shared prefix
+   (e.g. "Berlin Defense", "Schliemann"). Each group gets a small
+   heading with the family name + sub-ECO code + line count. Within a
+   group, each line shows its deepest-named sub-variation + horizontal
+   moves. */
+.vr-eco-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 0;
+}
+.vr-eco-group {
+  background: rgba(255,255,255,0.015);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.vr-eco-group-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 2px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.vr-eco-group-name {
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  color: var(--c-font, #e6e6e6);
+  text-transform: uppercase;
+}
+.vr-eco-group-eco {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-primary, #3692e7);
+  letter-spacing: 0.06em;
+}
+.vr-eco-group-count {
+  font-size: 11px;
+  color: var(--c-font-dimmer, rgba(255,255,255,0.45));
+  margin-left: auto;
+}
+.vr-eco-group-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.vr-eco-line-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.vr-eco-line-sublabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-font-dimmer, rgba(255,255,255,0.6));
+  letter-spacing: 0.03em;
+}
+.vr-eco-sub-eco {
+  font-weight: 500;
+  color: var(--c-primary, #3692e7);
+  margin-left: 4px;
+}
+.vr-eco-banner {
+  font-size: 11px;
+  color: #e39a5c;
+  padding: 6px 10px;
+  margin: 0 0 8px;
+  border-radius: 4px;
+  background: rgba(227, 154, 92, 0.08);
 }
 
 /* Intermediate-leaf annotation on a cell — indicates a shorter
