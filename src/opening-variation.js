@@ -36,7 +36,11 @@ const LS_MEMORY_KEY   = 'stockfish-explain.variation-memory'; // guest fallback
 
 const DEFAULTS = Object.freeze({
   enabled:         false,
-  maxForks:        5,           // 1..15 — opportunity window (engine moves considered)
+  startAtMove:     1,           // 1..10 — first engine MOVE (1-indexed) eligible
+                                 // for variation. 1 = the engine's very first
+                                 // think. 3 = the engine plays its first two
+                                 // moves "by the book," then variation starts.
+  maxForks:        1,           // 1..15 — opportunity window (engine moves considered)
   maxDeviations:   3,           // 1..15 — hard cap on actual non-#1 picks
   thinkMs:         30_000,      // 15s..120s
   earlyTolerance:  50,          // 10..100 cp
@@ -96,6 +100,10 @@ export function startSession(openingName, openingEco) {
   const s = getSettings();
   _session = {
     active:          !!s.enabled,
+    engineTurnsSeen: 0,   // how many engine turns have occurred this game
+                         // (incremented by noteEngineTurn() on every one,
+                         //  whether variation fires or not)
+    startAtMove:     Math.min(Math.max(1, +s.startAtMove || 1), 10),
     forkIndex:       0,   // how many engine-move opportunities consumed
     deviationsUsed:  0,   // how many of those ended in actual non-#1 pick
     recordedOk:      0,   // successful POST/localStorage recordings
@@ -114,6 +122,7 @@ export function startSession(openingName, openingEco) {
   console.log('[variation] session start', {
     enabled: _session.active,
     opening: openingName,
+    startAtMove: _session.startAtMove,
     maxForks: _session.maxForks,
     maxDeviations: _session.maxDeviations,
     thinkMs: _session.thinkMs,
@@ -129,6 +138,7 @@ export function endSession() {
   if (_session) {
     console.log('[variation] session end', {
       opening: _session.openingName,
+      engineTurnsSeen: _session.engineTurnsSeen,
       forksConsumed: _session.forkIndex,
       deviationsUsed: _session.deviationsUsed,
       recordedOk: _session.recordedOk,
@@ -138,8 +148,19 @@ export function endSession() {
   _session = null;
 }
 
+// Call this at the START of every engine turn (before isActive()), so
+// the session knows which engine-move number we're on. This lets the
+// startAtMove setting gate variation to only kick in on the K-th
+// engine turn onwards.
+export function noteEngineTurn() {
+  if (_session) _session.engineTurnsSeen++;
+}
+
 export function isActive() {
   if (!_session || !_session.active) return false;
+  // startAtMove=1 → variation eligible from turn 1.
+  // startAtMove=3 → turns 1,2 play best-of-best; turn 3 is first eligible.
+  if (_session.engineTurnsSeen < _session.startAtMove) return false;
   if (_session.forkIndex >= _session.maxForks) return false;
   if (_session.deviationsUsed >= _session.maxDeviations) return false;
   return true;

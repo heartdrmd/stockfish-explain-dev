@@ -3302,10 +3302,16 @@ async function main() {
               }
               // ─── Opening variation mode: in-window engine turn ────
               // When the user enabled the variation feature AND we're
-              // still inside the N-fork window, bump the engine to
-              // full strength + MultiPV 5 + the configured think time
-              // and let OpeningVariation.pickCandidate select from
-              // the top MultiPV with anti-repetition weighting.
+              // still inside the N-fork window (and past the startAt
+              // threshold), bump the engine to full strength + MultiPV 5
+              // + the configured think time and let
+              // OpeningVariation.pickCandidate select from the top
+              // MultiPV with anti-repetition weighting.
+              //
+              // noteEngineTurn() is called UNCONDITIONALLY on every
+              // engine turn (even when variation is off or not yet
+              // eligible) so the session's startAtMove gating works.
+              try { OpeningVariation.noteEngineTurn(); } catch {}
               let variationFork = null;
               try { if (OpeningVariation.isActive()) variationFork = OpeningVariation.consumeFork(); } catch {}
               const useVariation = !!variationFork;
@@ -8417,6 +8423,8 @@ async function main() {
     if (!modal) return;
     const $ = (id) => modal.querySelector('#' + id);
     const inEnabled   = $('vs-enabled');
+    const inStartAt   = $('vs-start-at-move');
+    const inStartAtVal = $('vs-start-at-move-val');
     const inForks     = $('vs-max-forks');
     const inForksVal  = $('vs-max-forks-val');
     const inDevs      = $('vs-max-deviations');
@@ -8441,6 +8449,7 @@ async function main() {
     function loadToForm() {
       const s = OpeningVariation.getSettings();
       inEnabled.checked = !!s.enabled;
+      inStartAt.value   = s.startAtMove || 1;  inStartAtVal.textContent = s.startAtMove || 1;
       inForks.value     = s.maxForks;     inForksVal.textContent = s.maxForks;
       inDevs.value      = s.maxDeviations; inDevsVal.textContent  = s.maxDeviations;
       inThink.value     = Math.round(s.thinkMs / 1000);  inThinkVal.textContent = Math.round(s.thinkMs / 1000);
@@ -8469,6 +8478,7 @@ async function main() {
       const vbEl = Array.from(modal.querySelectorAll('input[name="vs-variety-bias"]')).find(r => r.checked);
       return {
         enabled:        inEnabled.checked,
+        startAtMove:    +inStartAt.value,
         maxForks:       +inForks.value,
         maxDeviations:  +inDevs.value,
         thinkMs:        (+inThink.value) * 1000,
@@ -8485,11 +8495,13 @@ async function main() {
       if (!summary) return;
       const s = OpeningVariation.getSettings();
       if (!s.enabled) { summary.textContent = 'Opening variation: off'; return; }
-      summary.textContent = `Opening variation: ${s.maxForks} forks / ${s.maxDeviations} devs · ${s.earlyTolerance}${s.tighten ? '→' + s.lateTolerance : ''} cp · ${Math.round(s.thinkMs/1000)}s · ${s.devWeight}`;
+      const startBit = (s.startAtMove > 1) ? `from move ${s.startAtMove} · ` : '';
+      summary.textContent = `Opening variation: ${startBit}${s.maxForks} forks / ${s.maxDeviations} devs · ${s.earlyTolerance}${s.tighten ? '→' + s.lateTolerance : ''} cp · ${Math.round(s.thinkMs/1000)}s · ${s.devWeight}`;
     }
     refreshSummaryChip();
 
     // Live-value updates on slider input
+    inStartAt.addEventListener('input', () => inStartAtVal.textContent = inStartAt.value);
     inForks.addEventListener('input', () => inForksVal.textContent = inForks.value);
     inDevs .addEventListener('input', () => inDevsVal.textContent  = inDevs.value);
     inThink.addEventListener('input', () => inThinkVal.textContent = inThink.value);
