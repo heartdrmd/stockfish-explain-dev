@@ -709,7 +709,16 @@
           <small class="muted">Style biases the engine toward a specific type of move from its top candidates. Skill still controls raw strength.</small>
         </div>
         <div class="setting" style="grid-column: 1 / -1;">
-          <label style="font-weight:600;display:block;margin-bottom:6px;">🎲 Opening variation</label>
+          <label style="font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
+            <span>🎲 Opening variation</span>
+            <!-- Inline on/off toggle — saves a trip into the settings modal
+                 just to enable or disable the feature. Driven by the same
+                 `vs-enabled` state under the hood. -->
+            <label style="display:flex;align-items:center;gap:6px;font-weight:500;font-size:12px;cursor:pointer;">
+              <input type="checkbox" id="practice-variation-quick-toggle" style="width:16px;height:16px;cursor:pointer;">
+              <span id="practice-variation-quick-label" style="color:var(--c-font-dim);">off</span>
+            </label>
+          </label>
           <button id="practice-variation-settings" type="button" class="btn" style="width:100%;padding:10px 14px;background:linear-gradient(180deg,#2d3a4a 0%,#1f2a36 100%);border:1px solid #3a4a5a;color:#cfe0f5;font-weight:500;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:8px;">
             <span>🎲 <span id="practice-variation-summary">Opening variation: off</span></span>
             <span style="opacity:0.6;font-size:11px;">click to configure ⚙</span>
@@ -1287,10 +1296,16 @@
        "🎲 Opening variation" button. All values persist to
        localStorage via opening-variation.js. -->
   <div id="variation-settings-modal" class="modal" hidden>
-    <div class="modal-card" style="max-width:560px;">
+    <div class="modal-card vs-card" style="max-width:560px;">
       <button class="modal-close" id="vs-close" aria-label="Close">×</button>
-      <h3 style="margin-top:0;">🎲 Opening variation</h3>
-      <p class="muted" style="font-size:12px;margin:-4px 0 14px;">
+      <!-- Sticky action bar at the TOP so Save is always in reach, no
+           matter how far the user has scrolled through the settings. -->
+      <div class="vs-sticky-bar">
+        <h3 style="margin:0;font-size:16px;">🎲 Opening variation</h3>
+        <span style="flex:1;"></span>
+        <button type="button" id="vs-save-top"   class="btn" style="background:var(--c-primary);color:#fff;font-weight:600;">Save</button>
+      </div>
+      <p class="muted" style="font-size:12px;margin:8px 0 14px;">
         Engine picks slightly-suboptimal-but-sound moves at the first few
         forks of the opening so repeat drills of the same line don't play out
         identically. Every fork runs at <strong>Skill 20 + MultiPV 5</strong>.
@@ -1348,10 +1363,12 @@
 
       <section class="vs-section">
         <h4 class="vs-h">🎭 Deviation weight (how likely to pick non-#1 early)</h4>
-        <div class="vs-row" role="radiogroup">
-          <label class="vs-radio"><input type="radio" name="vs-dev-weight" value="mild">   <span>Mild (50→15%)</span></label>
-          <label class="vs-radio"><input type="radio" name="vs-dev-weight" value="medium"> <span>Medium (65→18%)</span></label>
-          <label class="vs-radio"><input type="radio" name="vs-dev-weight" value="strong"> <span>Strong (80→20%)</span></label>
+        <div class="vs-row" role="radiogroup" style="flex-wrap:wrap;gap:8px;">
+          <label class="vs-radio"><input type="radio" name="vs-dev-weight" value="ultra-mild">   <span>Ultra mild (20→5%)</span></label>
+          <label class="vs-radio"><input type="radio" name="vs-dev-weight" value="mild">         <span>Mild (50→15%)</span></label>
+          <label class="vs-radio"><input type="radio" name="vs-dev-weight" value="medium">       <span>Medium (65→18%)</span></label>
+          <label class="vs-radio"><input type="radio" name="vs-dev-weight" value="strong">       <span>Strong (80→20%)</span></label>
+          <label class="vs-radio"><input type="radio" name="vs-dev-weight" value="ultra-strong"> <span>Ultra strong (95→40%)</span></label>
         </div>
       </section>
 

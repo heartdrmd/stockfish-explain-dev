@@ -3625,6 +3625,27 @@ body.in-variation-fork .ceval-variation-badge {
 }
 #vs-late-row[hidden] { display: none !important; }
 
+/* Sticky action bar at the TOP of the variation settings modal.
+   Keeps the Save button permanently visible no matter how far the
+   user has scrolled through the settings. The modal-card is the
+   scroll container (overflow-y: auto, max-height: 80vh) so sticky
+   anchored at top:0 pins inside it cleanly. */
+.vs-card { padding-top: 0 !important; }  /* let sticky bar own the top padding */
+.vs-sticky-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 22px 10px;
+  margin: 0 -22px 0;            /* extend edge-to-edge of the modal-card */
+  background: var(--c-bg);
+  border-bottom: 1px solid var(--c-border, rgba(255,255,255,0.1));
+  backdrop-filter: blur(4px);
+}
+.vs-sticky-bar h3 { margin: 0; font-size: 16px; }
+
 /* Variation report — ECO-tree layout with header + opening dropdown */
 .vr-header {
   display: flex;

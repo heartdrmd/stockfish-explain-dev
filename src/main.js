@@ -8658,8 +8658,33 @@ async function main() {
     const btnClose    = $('vs-close');
     const btnCancel   = $('vs-cancel');
     const btnSave     = $('vs-save');
+    const btnSaveTop  = $('vs-save-top');   // always-visible sticky duplicate
     const btnRestore  = $('vs-restore');
     const memoryHint  = $('vs-memory-hint');
+
+    // Quick on/off toggle that lives in the practice modal above the
+    // big 🎲 button. Shares state with the modal's `vs-enabled`
+    // checkbox so either control flips the same setting.
+    const quickToggle      = document.getElementById('practice-variation-quick-toggle');
+    const quickToggleLabel = document.getElementById('practice-variation-quick-label');
+    function syncQuickToggleFromSettings() {
+      if (!quickToggle) return;
+      const s = OpeningVariation.getSettings();
+      quickToggle.checked = !!s.enabled;
+      if (quickToggleLabel) {
+        quickToggleLabel.textContent = s.enabled ? 'on' : 'off';
+        quickToggleLabel.style.color = s.enabled ? 'var(--c-primary, #3692e7)' : 'var(--c-font-dim)';
+      }
+    }
+    syncQuickToggleFromSettings();
+    if (quickToggle) {
+      quickToggle.addEventListener('change', () => {
+        // Flip JUST the enabled flag; leave every other setting alone.
+        OpeningVariation.saveSettings({ enabled: quickToggle.checked });
+        syncQuickToggleFromSettings();
+        refreshSummaryChip();
+      });
+    }
 
     function loadToForm() {
       const s = OpeningVariation.getSettings();
@@ -8733,14 +8758,19 @@ async function main() {
     modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
     window.__openVariationSettings = open;
 
-    btnSave.addEventListener('click', () => {
+    function doSave() {
       OpeningVariation.saveSettings(formToObject());
       refreshSummaryChip();
+      syncQuickToggleFromSettings();
       close();
-    });
+    }
+    btnSave.addEventListener('click', doSave);
+    if (btnSaveTop) btnSaveTop.addEventListener('click', doSave);
     btnRestore.addEventListener('click', () => {
       OpeningVariation.resetSettings();
       loadToForm();
+      syncQuickToggleFromSettings();
+      refreshSummaryChip();
     });
 
     // Reset memory for the last-played opening (confirm-gated).

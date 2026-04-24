@@ -63,10 +63,19 @@ const VARIETY_BIAS_K = { even: 300, mild: 100, moderate: 50, strong: 25 };
 // probability" = how likely the picker is to choose a NON-#1 candidate
 // at a given fork (after tolerance filtering). Tapers linearly across
 // the N-fork window.
+//
+// Extended range — user asked for more options at both extremes:
+//   ultra-mild  = barely deviates, almost always plays best (20→5%)
+//   mild        = occasional deviation (50→15%)
+//   medium      = balanced (65→18%)
+//   strong      = deviates often (80→20%)
+//   ultra-strong= deviates almost every time (95→40%)
 const DEV_WEIGHT_CURVE = {
-  mild:   [0.50, 0.15],
-  medium: [0.65, 0.18],
-  strong: [0.80, 0.20],
+  'ultra-mild':   [0.20, 0.05],
+  mild:           [0.50, 0.15],
+  medium:         [0.65, 0.18],
+  strong:         [0.80, 0.20],
+  'ultra-strong': [0.95, 0.40],
 };
 
 // ─── Settings persistence ──────────────────────────────────────────
