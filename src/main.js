@@ -3500,6 +3500,17 @@ async function main() {
                     console.log('[practice] engine plays', pickedUci, '(style:', style, ')');
                     board.playEngineMove(pickedUci);
                   }
+                } else if (ev.detail.stuck) {
+                  // Engine was wedged — watchdog fired a synthetic
+                  // bestmove to unlatch us. Tell the user clearly + let
+                  // them recover. The engine instance itself will auto-
+                  // recover on the NEXT search via the silent-engine
+                  // detector in engine.js.
+                  console.error('[practice] engine STUCK — synthetic bestmove received, asking user to restart');
+                  ui.narrationText.innerHTML =
+                    '⚠ Engine got stuck on this position. Click ' +
+                    '<strong>🔁 Same opening again</strong> (in the practice panel when the game ends) ' +
+                    'or press <kbd>R</kbd> to resign and start fresh.';
                 } else {
                   console.log('[practice] engine returned (none) — probably game over');
                   ui.narrationText.innerHTML = 'Engine has no legal moves — game over.';

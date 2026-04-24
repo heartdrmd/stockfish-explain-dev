@@ -485,6 +485,11 @@ export class Engine extends EventTarget {
     this.searching = true;
     this.stopRequested = false;
     this.currentFen = fen;
+    // Separate from `searching` because stop() sets searching=false
+    // immediately on the JS side while the worker may still owe us a
+    // bestmove. The synthetic-bestmove backup in the watchdog checks
+    // THIS flag so it actually fires when the worker really is wedged.
+    this._bestmoveAwaited = true;
 
     // ───── Mismatch detector ─────
     // Track per-search diagnostics so we can catch the "engine should
@@ -547,14 +552,18 @@ export class Engine extends EventTarget {
       ? Math.max(3000, opts.movetime * 3)
       : (opts.depth ? 60_000 : 60_000);
     this._watchdogId = setTimeout(() => {
-      if (!this.searching) return;
+      if (!this._bestmoveAwaited) return;
       console.warn('[engine] bestmove watchdog fired — forcing stop');
       this.stop();
-      // If stop itself hangs, dispatch a synthetic bestmove so callers
-      // unlatch. Consumers should treat best=null as "engine stuck".
+      // If stop itself hangs (worker wedged, no bestmove reply),
+      // dispatch a synthetic one so callers unlatch. Consumers should
+      // treat best=null as "engine stuck" and recover. We check
+      // _bestmoveAwaited (NOT .searching, which stop() just cleared
+      // unconditionally on the JS side).
       setTimeout(() => {
-        if (!this.searching) return;
+        if (!this._bestmoveAwaited) return;
         console.error('[engine] worker appears wedged — emitting synthetic bestmove');
+        this._bestmoveAwaited = false;
         this.searching = false;
         this.dispatchEvent(new CustomEvent('bestmove', {
           detail: { best: null, ponder: null, topMoves: [], history: this.history, stuck: true }
@@ -674,6 +683,7 @@ export class Engine extends EventTarget {
         return;
       }
       this.searching = false;
+      this._bestmoveAwaited = false;
       this.stopRequested = false;
       if (this._healthCheckId) { clearTimeout(this._healthCheckId); this._healthCheckId = 0; }
       if (this._watchdogId) { clearTimeout(this._watchdogId); this._watchdogId = 0; }
