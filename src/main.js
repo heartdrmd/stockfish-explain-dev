@@ -9417,22 +9417,16 @@ async function main() {
   });
 
   if (btnToggleToolbar) {
-    // Default to collapsed toolbar if the user has never explicitly
-    // expanded it. The toolbar eats ~60 px of vertical real-estate
-    // and most interactions happen on the board or in the side cards
-    // — matches lila's hide-by-default toolbar. Once the user toggles
-    // it open, that preference persists (localStorage key stays '0').
-    try {
-      const saved = localStorage.getItem('stockfish-explain.nav-collapsed');
-      const collapsed = saved === null ? true : saved === '1';
-      if (collapsed) {
-        document.body.classList.add(BODY_NAV_COLLAPSED);
-        prevNavCollapsed = true;
-      }
-    } catch {
-      document.body.classList.add(BODY_NAV_COLLAPSED);
-      prevNavCollapsed = true;
-    }
+    // ALWAYS start collapsed on every fresh page load / refresh,
+    // regardless of any persisted preference. Rationale: the toolbar
+    // eats ~60 px of vertical real-estate and the user confirmed they
+    // want a clean board on entry every time. If they want it open
+    // they click the toggle — that's a per-session state and resets
+    // on the next load. Persisted localStorage key is still written
+    // by the toggle handler (for any other code that inspects it)
+    // but it is deliberately NOT READ here.
+    document.body.classList.add(BODY_NAV_COLLAPSED);
+    prevNavCollapsed = true;
   }
 
   // Graceful shutdown on page unload — send UCI 'quit' so the engine
