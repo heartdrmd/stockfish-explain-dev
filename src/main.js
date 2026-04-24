@@ -809,21 +809,34 @@ async function main() {
 
   // Default to the last-used engine flavor (persisted) if it still exists
   // in the dropdown AND is valid in this environment. Otherwise fall back
-  // to the strongest engine available in the current environment.
+  // to the strongest STOCK (unmodified) Stockfish available in the
+  // current environment.
   const FLAVOR_STORAGE = 'stockfish-explain.engine-flavor';
-  const savedFlavor = localStorage.getItem(FLAVOR_STORAGE);
+  let savedFlavor = localStorage.getItem(FLAVOR_STORAGE);
   const flavorOptions = [...ui.selectFlavor.querySelectorAll('option')].map(o => o.value);
+  // Avrukh-flavoured builds (custom NNUE / SEE-patched) have been the
+  // source of silent-engine wedges (user saw the engine hang mid-move
+  // on avrukh with the Stock Full NNUE in parallel being rock-solid).
+  // Auto-migrate ANY persisted avrukh-* choice to the stock default.
+  // Users who deliberately want avrukh still reach it from the toolbar
+  // selector — this just stops it being the auto-start choice.
+  if (savedFlavor && /^avrukh/i.test(savedFlavor)) {
+    console.log('[engine] migrating persisted avrukh flavor → stock default', { was: savedFlavor });
+    try { localStorage.removeItem(FLAVOR_STORAGE); } catch {}
+    savedFlavor = null;
+  }
   const flavorValid = savedFlavor && flavorOptions.includes(savedFlavor);
   // Default picker (only used when no persisted choice exists):
-  //   desktop, threadable, not Pages      → avrukh (108 MB, strongest)
-  //   mobile, threadable, not Pages       → lite    (13 MB, fast first-load)
-  //   anywhere threadable on Pages host   → lite    (full-net not bundled)
-  //   no threads, mobile                  → lite-single
-  //   no threads, desktop                 → avrukh-single
+  //   desktop, threadable, not Pages      → full          (stock 108 MB MT, strongest stable)
+  //   mobile, threadable, not Pages       → lite          (stock 7 MB MT,  fast first-load)
+  //   anywhere threadable on Pages host   → lite          (full-net not bundled)
+  //   no threads, mobile OR desktop       → lite-single   (stock 7 MB ST)
+  // Deliberately NEVER picks any custom/patched build (avrukh, kaufman,
+  // classical, alphazero, avrukhplus). Those are opt-in only.
   function pickDefaultFlavor() {
     if (isPagesHost) return 'lite';
-    if (threadable)  return IS_MOBILE ? 'lite'        : 'avrukh';
-    return               IS_MOBILE ? 'lite-single' : 'avrukh-single';
+    if (threadable)  return IS_MOBILE ? 'lite' : 'full';
+    return 'lite-single';
   }
   let currentFlavor = flavorValid ? savedFlavor : pickDefaultFlavor();
   ui.selectFlavor.value = currentFlavor;
@@ -938,11 +951,13 @@ async function main() {
       // Auto-fallback chain: on crash/timeout, walk a priority list
       // of safer flavors until one works. Stops as soon as a flavor
       // boots — doesn't loop forever if every flavor is broken.
-      //   desktop: Avrukh (preferred) → lite MT → lite ST.
+      // ALL STOCK builds only — custom NNUEs (avrukh etc) are opt-in
+      // by manual pick and are never used as an auto-recovery target.
+      //   desktop: full MT → lite MT → lite ST.
       //   mobile:  lite MT → lite ST   (skip the 108 MB download).
       const fallbackChain = IS_MOBILE
         ? (threadable ? ['lite', 'lite-single'] : ['lite-single'])
-        : (threadable ? ['avrukh', 'lite', 'lite-single'] : ['avrukh-single', 'lite-single']);
+        : (threadable ? ['full', 'lite', 'lite-single'] : ['lite-single']);
       const nextFlavor = fallbackChain.find(f => f !== flavor);
       if ((isTimeout || isCrash) && nextFlavor) {
         localStorage.removeItem(FLAVOR_STORAGE);
