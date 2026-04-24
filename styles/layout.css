@@ -278,30 +278,29 @@ body.nav-collapsed .site-header { min-height: 40px; padding: 6px 14px; }
   }
 }
 
-/* ── Desktop: lock board + engine analysis in view during practice
-   (play + post-game review). Same intent as the mobile rule below —
-   user's primary reference points are the board and the engine's
-   current score/depth/PV; scrolling the page to read the move list
-   or coach tabs shouldn't lose either of them.
+/* ── Desktop: lock board + engine-power row + engine analysis in view
+   ALWAYS (front page, new game, live practice, post-game review). The
+   primary reference points are the board and the engine's current
+   score/depth/PV — scrolling the page to read the move list, coach
+   tabs, eval timeline, etc. should never cost you those anchors.
 
-   Pinned elements (all at the same `top:` so they line up in a
-   stable row across columns):
-     .board-area      — the chessground wrap itself
-     .eval-gauge      — value bar sitting between board and tools
-     .tools > .ceval  — engine score / depth / PV
+   Pinned elements:
+     .board-area              — the chessground wrap itself
+     .eval-gauge              — value bar between board and tools
+     .tools > .engine-power-row  — engine on/off + threat toggle row
+     .tools > .ceval          — engine score / depth / PV (stacks
+                                 below engine-power-row)
 
-   Within the .tools column, .ceval is the ONLY child we sticky.
    The move list / coach tabs / eval timeline / pawn strip all scroll
-   past it like a newsfeed, exactly what the user wants during review.
+   past underneath like a newsfeed.
 
-   Stays sticky for the WHOLE practice lifecycle (live play AND
-   post-game analysis). Released only when practice-mode is cleared.
-   Desktop-only: mobile has its own rule that releases sticky after
-   the game ends (small screens can't afford board + ceval pinned). */
+   No .practice-mode gate: this is the default behaviour now. User's
+   explicit ask — they want stable anchors regardless of mode. Mobile
+   has its own rule below with a tighter offset. */
 @media (min-width: 800px), (orientation: landscape) and (min-width: 560px) {
-  body.practice-mode:not(.mobile-mode) .uniboard .board-area,
-  body.practice-mode:not(.mobile-mode) .uniboard .eval-gauge,
-  body.practice-mode:not(.mobile-mode) .uniboard .tools > .ceval {
+  body:not(.mobile-mode) .uniboard .board-area,
+  body:not(.mobile-mode) .uniboard .eval-gauge,
+  body:not(.mobile-mode) .uniboard .tools > .engine-power-row {
     position: sticky;
     /* .site-header is position:sticky with min-height 60px (40 when
        the toolbar is collapsed). Offset just below it + a small gap. */
@@ -309,16 +308,31 @@ body.nav-collapsed .site-header { min-height: 40px; padding: 6px 14px; }
     align-self: start;   /* grid cells stretch by default; start for sticky */
     z-index: 30;         /* above scrolled tools, below modals/header */
   }
-  body.practice-mode.nav-collapsed:not(.mobile-mode) .uniboard .board-area,
-  body.practice-mode.nav-collapsed:not(.mobile-mode) .uniboard .eval-gauge,
-  body.practice-mode.nav-collapsed:not(.mobile-mode) .uniboard .tools > .ceval {
-    top: 48px;
-  }
-  /* Small visual seam under the sticky ceval so the scrolling move
-     list underneath doesn't appear to bleed into the engine panel. */
-  body.practice-mode:not(.mobile-mode) .uniboard .tools > .ceval {
+  /* .ceval stacks DIRECTLY below the engine-power-row (which is ~56 px
+     tall including its margin-bottom: 10px). The combined offset keeps
+     both visible simultaneously at the top of the right column. */
+  body:not(.mobile-mode) .uniboard .tools > .ceval {
+    position: sticky;
+    top: 124px;           /* 68 (header) + 56 (engine-power-row) */
+    align-self: start;
+    z-index: 29;          /* one below engine-power-row so power covers ceval on any overlap */
     background: var(--c-bg);
     box-shadow: 0 4px 8px -4px rgba(0,0,0,0.45);
+  }
+  /* Collapsed-toolbar variant: header shrinks to 40 px, so every
+     sticky slot shifts up by 20 px. */
+  body.nav-collapsed:not(.mobile-mode) .uniboard .board-area,
+  body.nav-collapsed:not(.mobile-mode) .uniboard .eval-gauge,
+  body.nav-collapsed:not(.mobile-mode) .uniboard .tools > .engine-power-row {
+    top: 48px;
+  }
+  body.nav-collapsed:not(.mobile-mode) .uniboard .tools > .ceval {
+    top: 104px;           /* 48 (collapsed header) + 56 (engine-power-row) */
+  }
+  /* engine-power-row needs its own bg so items scrolling underneath
+     don't leak through. */
+  body:not(.mobile-mode) .uniboard .tools > .engine-power-row {
+    background: var(--c-bg);
   }
 }
 
@@ -452,30 +466,28 @@ body.nav-collapsed .site-header { min-height: 40px; padding: 6px 14px; }
   body.mobile-mode.mobile-drawer-collapsed .move-list-wrap,
   body.mobile-mode.mobile-drawer-collapsed .tabbed { display: none; }
 
-  /* ── Lock the board into view during a LIVE practice game ──────
+  /* ── Lock the board into view ALWAYS on mobile ────────────────
      On mobile portrait, the page stacks board → tools → side. If
      the user scrolls down to read the move list or coach output,
-     the board goes off-screen — you lose your anchor to what you're
-     playing. During an active game, pin the board-area sticky under
-     the fixed clock bar so it can't be scrolled away. Released once
-     the game ends (.practice-finished) so the user can explore
-     analysis panels freely.
+     the board goes off-screen — you lose your anchor. Pin the
+     board-area sticky so it can't be scrolled away, regardless of
+     whether a practice game is in progress. Same treatment as
+     desktop now (user's explicit ask).
 
      Grid containers gate sticky to the grid cell in many browsers —
      the cell is only as tall as the board, so sticky has nothing to
-     travel across. Flatten to a flex column during live play so the
-     sticky containing block is the whole .uniboard height (= whole
-     page scroll). This is the fix for the "board still scrolls off
-     screen" bug from v1 of this rule. */
-  body.mobile-mode.practice-mode:not(.practice-finished) .uniboard {
+     travel across. Flatten to a flex column so the sticky containing
+     block is the whole .uniboard height (= whole page scroll). */
+  body.mobile-mode .uniboard {
     display: flex;
     flex-direction: column;
     gap: 6px;
   }
-  body.mobile-mode.practice-mode:not(.practice-finished) .uniboard .board-area {
+  body.mobile-mode .uniboard .board-area {
     position: sticky;
-    /* Keep below the ~40 px fixed clock bar at the top. env() handles
-       notched phones cleanly when the clock sits below the notch. */
+    /* Just under the site header. During practice there's a fixed
+       clock bar above but it's above z-index 40 anyway — board sits
+       behind it. env() tucks notched phones correctly. */
     top: calc(48px + env(safe-area-inset-top, 0px));
     z-index: 40;     /* under the clock (100) + modals, over tools */
     background: var(--c-bg);
