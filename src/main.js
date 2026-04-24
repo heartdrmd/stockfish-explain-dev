@@ -7603,10 +7603,9 @@ async function main() {
     }
 
     function openTab() {
-      if (!window.__currentUser) {
-        document.getElementById('btn-signin')?.click();
-        return;
-      }
+      // Guests are fully supported now — no account needed. Their games
+      // are auto-saved to the server under a stable localStorage guest
+      // token; listGames / statsGames scope to it automatically.
       tab.hidden = false;
       document.body.classList.add('mg-open');
       refreshStats();
