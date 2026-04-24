@@ -181,6 +181,37 @@ const migrations = [
         ADD COLUMN IF NOT EXISTS prefix_moves TEXT;
     `,
   },
+  {
+    // Guest-player game archive: users without an account can now save
+    // games to the server too, keyed by a browser-generated UUID
+    // ("guest_id") stored in localStorage. This makes first-time usage
+    // feel exactly like the logged-in path (cloud save, filters, export)
+    // without forcing signup. A row in `games` is keyed by EXACTLY one
+    // of (user_id, guest_id) — enforced by a CHECK constraint.
+    //
+    //   - user_id becomes nullable (was NOT NULL before)
+    //   - new nullable guest_id column
+    //   - check: exactly one of them set
+    //   - index for guest lookups
+    //
+    // If a guest later creates an account, a future migration can
+    // claim their guest games by setting user_id = me WHERE guest_id = X.
+    name: '010_guest_games',
+    sql: `
+      ALTER TABLE games
+        ALTER COLUMN user_id DROP NOT NULL,
+        ADD COLUMN IF NOT EXISTS guest_id TEXT;
+
+      -- Drop & recreate the check if it exists (idempotent upgrades).
+      ALTER TABLE games DROP CONSTRAINT IF EXISTS games_owner_xor;
+      ALTER TABLE games ADD CONSTRAINT games_owner_xor
+        CHECK ((user_id IS NOT NULL) <> (guest_id IS NOT NULL));
+
+      CREATE INDEX IF NOT EXISTS idx_games_guest_played
+        ON games(guest_id, played_at DESC)
+        WHERE guest_id IS NOT NULL;
+    `,
+  },
 ];
 
 export async function runMigrations() {

@@ -3,6 +3,41 @@
 // All helpers include credentials so the session cookie rides along.
 // Errors throw with { status, message } so callers can pattern-match
 // on HTTP 401 to prompt for login, 413 for too-big payloads, etc.
+//
+// Guest support: endpoints that accept anonymous callers (like the
+// game archive under /api/games) receive an X-Guest-Id header when
+// the user isn't logged in. The ID is a random 22-char URL-safe
+// token persisted in localStorage — stable across refreshes so the
+// server can scope the guest's games consistently.
+
+const GUEST_ID_KEY = 'stockfish-explain.guest-id';
+
+// Generate a 22-char URL-safe random ID (128 bits of entropy). Used
+// instead of UUIDv4 because the dashes in UUIDs waste header bytes
+// and our regex on the server accepts [A-Za-z0-9_-].
+function newGuestId() {
+  const bytes = new Uint8Array(16);
+  (crypto || window.crypto).getRandomValues(bytes);
+  // base64url without padding: A-Z a-z 0-9 - _
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+export function getGuestId() {
+  try {
+    let id = localStorage.getItem(GUEST_ID_KEY);
+    if (!id || !/^[A-Za-z0-9_-]{16,64}$/.test(id)) {
+      id = newGuestId();
+      localStorage.setItem(GUEST_ID_KEY, id);
+    }
+    return id;
+  } catch {
+    // Private-mode / quota-exceeded: return a transient one — cloud save
+    // still works for this session, just won't persist across reloads.
+    return newGuestId();
+  }
+}
 
 async function req(method, url, body) {
   const opts = {
@@ -10,6 +45,10 @@ async function req(method, url, body) {
     credentials: 'include',
     headers: { 'Accept': 'application/json' },
   };
+  // Always send a guest ID — the server ignores it when a session
+  // cookie is also present. This lets guests and logged-in users share
+  // the exact same API surface without branching the call sites.
+  try { opts.headers['X-Guest-Id'] = getGuestId(); } catch {}
   if (body !== undefined) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(body);
@@ -54,8 +93,12 @@ export const api = {
   deleteGame: (id)      => req('DELETE', `/api/games/${+id}`),
   // Returns the export URL so the caller can set window.location or
   // create an <a download> — lets the browser stream the file directly.
+  // Guest ID goes via the guest_id query param here because the
+  // download flow can't attach custom headers the way fetch() does.
   exportUrl:  (q = {})  => {
-    const qs = new URLSearchParams(Object.entries(q).filter(([,v]) => v != null && v !== ''));
+    const merged = { ...q };
+    try { merged.guest_id = getGuestId(); } catch {}
+    const qs = new URLSearchParams(Object.entries(merged).filter(([,v]) => v != null && v !== ''));
     return '/api/games/export.pgn' + (qs.toString() ? '?' + qs : '');
   },
 };

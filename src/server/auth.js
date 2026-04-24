@@ -83,6 +83,33 @@ export function requireAuth(req, res, next) {
   });
 }
 
+// Guest-id validator: ~UUIDv4 shape but we also accept any 16-64 char
+// token of [a-zA-Z0-9_-]. Keeps the server from trusting whatever the
+// client posts (rate-limiting / abuse belongs in a separate layer).
+const GUEST_ID_RE = /^[A-Za-z0-9_-]{16,64}$/;
+function readGuestId(req) {
+  const raw = req.get('X-Guest-Id') || req.query?.guest_id || '';
+  return GUEST_ID_RE.test(raw) ? raw : null;
+}
+
+// Attach req.user (logged in) OR req.guest (guest token) and call next.
+// Used by endpoints that work for both populations (game archive).
+export function requireAuthOrGuest(req, res, next) {
+  readSession(req).then(session => {
+    if (session) {
+      req.user = session;
+      return next();
+    }
+    const gid = readGuestId(req);
+    if (!gid) return res.status(401).json({ error: 'not authenticated and no guest id' });
+    req.guest = { id: gid };
+    next();
+  }).catch(err => {
+    console.error('[auth] session-or-guest lookup failed', err);
+    res.status(500).json({ error: 'session lookup failed' });
+  });
+}
+
 export function wireAuth(app) {
   app.post('/api/auth/signup', async (req, res) => {
     try {

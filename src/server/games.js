@@ -1,13 +1,15 @@
 // src/server/games.js — game archive + mistakes endpoints.
 //
-// All endpoints require auth (via requireAuth middleware from auth.js).
-// Games are stored with per-ply eval data (JSONB) so the client can
-// reconstruct the eval timeline + mistake pills without re-analysing.
+// Accepts either authenticated users (session cookie) or anonymous
+// guests (X-Guest-Id header). Each game row is owned by EXACTLY ONE
+// of user_id or guest_id (DB-enforced via CHECK constraint). This
+// lets a guest use the cloud archive immediately — no signup friction
+// — while still scoping every query to the caller.
 //
 // Wired as a group in server.js: wireGames(app).
 
 import { query } from './db.js';
-import { requireAuth } from './auth.js';
+import { requireAuthOrGuest } from './auth.js';
 
 // Allowed sort keys → SQL ORDER BY expressions. Whitelisted so no
 // arbitrary strings from query params ever reach Postgres.
@@ -19,9 +21,19 @@ const SORT_MAP = {
   most_moves:      'jsonb_array_length(COALESCE(plies, \'[]\'::jsonb)) DESC, played_at DESC',
 };
 
+// Returns { ownerCol, ownerVal } — which column/value identifies this
+// caller on the games table. Exactly one of user_id / guest_id.
+function ownerOf(req) {
+  if (req.user)  return { ownerCol: 'user_id',  ownerVal: req.user.id };
+  if (req.guest) return { ownerCol: 'guest_id', ownerVal: req.guest.id };
+  // requireAuthOrGuest guarantees one of the two — but belt & braces.
+  throw new Error('ownerOf called without auth or guest');
+}
+
 function buildFilters(req) {
-  const params = [req.user.id];
-  const where  = ['user_id = $1'];
+  const { ownerCol, ownerVal } = ownerOf(req);
+  const params = [ownerVal];
+  const where  = [`${ownerCol} = $1`];
   const q = req.query || {};
   if (q.from)   { params.push(q.from);   where.push(`played_at >= $${params.length}`); }
   if (q.to)     { params.push(q.to);     where.push(`played_at <  $${params.length}`); }
@@ -49,7 +61,7 @@ export function wireGames(app) {
   // Body: { pgn, result, opening_name, opening_eco, white_name, black_name,
   //         user_color, mode, plies, mistakes_count, blunders_count }
   // Response: { id, played_at }
-  app.post('/api/games', requireAuth, async (req, res) => {
+  app.post('/api/games', requireAuthOrGuest, async (req, res) => {
     try {
       const b = req.body || {};
       if (!b.pgn || typeof b.pgn !== 'string') {
@@ -59,15 +71,19 @@ export function wireGames(app) {
       // part; even a 100-move game with full plies stays under 30 KB.
       if (b.pgn.length > 100_000) return res.status(413).json({ error: 'pgn too large' });
 
+      const userId  = req.user  ? req.user.id  : null;
+      const guestId = req.guest ? req.guest.id : null;
+
       const { rows } = await query(`
         INSERT INTO games(
-          user_id, pgn, result, opening_name, opening_eco,
+          user_id, guest_id, pgn, result, opening_name, opening_eco,
           white_name, black_name, user_color, mode, plies,
           mistakes_count, blunders_count
-        ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
         RETURNING id, played_at
       `, [
-        req.user.id,
+        userId,
+        guestId,
         b.pgn,
         b.result || null,
         b.opening_name || null,
@@ -87,7 +103,7 @@ export function wireGames(app) {
     }
   });
 
-  // GET /api/games  — list user's games.
+  // GET /api/games  — list caller's games (user OR guest scope).
   // Query params:
   //   from=YYYY-MM-DD (inclusive)  to=YYYY-MM-DD (exclusive)
   //   result=1-0|0-1|1/2-1/2
@@ -97,7 +113,7 @@ export function wireGames(app) {
   //   cleanliness=clean|mistakes|blunders
   //   sort=newest|oldest|most_mistakes|fewest_mistakes|most_moves
   //   limit (default 100, max 500)  offset (default 0)
-  app.get('/api/games', requireAuth, async (req, res) => {
+  app.get('/api/games', requireAuthOrGuest, async (req, res) => {
     try {
       const limit  = Math.min(500, Math.max(1, +req.query.limit  || 100));
       const offset = Math.max(0, +req.query.offset || 0);
@@ -124,7 +140,7 @@ export function wireGames(app) {
 
   // GET /api/games/stats  — aggregate counts honouring the same filters
   // as /api/games. Powers the My Games header strip.
-  app.get('/api/games/stats', requireAuth, async (req, res) => {
+  app.get('/api/games/stats', requireAuthOrGuest, async (req, res) => {
     try {
       const { params, where } = buildFilters(req);
       const { rows } = await query(`
@@ -156,13 +172,14 @@ export function wireGames(app) {
   });
 
   // GET /api/games/:id — fetch full PGN + plies for replay.
-  app.get('/api/games/:id', requireAuth, async (req, res) => {
+  app.get('/api/games/:id', requireAuthOrGuest, async (req, res) => {
     try {
       const id = +req.params.id;
       if (!Number.isFinite(id)) return res.status(400).json({ error: 'bad id' });
+      const { ownerCol, ownerVal } = ownerOf(req);
       const { rows } = await query(
-        'SELECT * FROM games WHERE id = $1 AND user_id = $2',
-        [id, req.user.id],
+        `SELECT * FROM games WHERE id = $1 AND ${ownerCol} = $2`,
+        [id, ownerVal],
       );
       if (!rows.length) return res.status(404).json({ error: 'not found' });
       res.json({ game: rows[0] });
@@ -173,13 +190,14 @@ export function wireGames(app) {
   });
 
   // DELETE /api/games/:id — "don't save this game" or user purge.
-  app.delete('/api/games/:id', requireAuth, async (req, res) => {
+  app.delete('/api/games/:id', requireAuthOrGuest, async (req, res) => {
     try {
       const id = +req.params.id;
       if (!Number.isFinite(id)) return res.status(400).json({ error: 'bad id' });
+      const { ownerCol, ownerVal } = ownerOf(req);
       const result = await query(
-        'DELETE FROM games WHERE id = $1 AND user_id = $2',
-        [id, req.user.id],
+        `DELETE FROM games WHERE id = $1 AND ${ownerCol} = $2`,
+        [id, ownerVal],
       );
       res.json({ deleted: result.rowCount });
     } catch (err) {
@@ -190,7 +208,7 @@ export function wireGames(app) {
 
   // GET /api/games/export.pgn  — download games as a single PGN file.
   // Honours the full filter set (same as /api/games).
-  app.get('/api/games/export.pgn', requireAuth, async (req, res) => {
+  app.get('/api/games/export.pgn', requireAuthOrGuest, async (req, res) => {
     try {
       const { params, where } = buildFilters(req);
       const { rows } = await query(

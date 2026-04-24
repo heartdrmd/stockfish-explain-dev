@@ -3148,6 +3148,32 @@ async function main() {
       const o = detectOpening(sanHistory, board.fen());
       if (o) opening = { name: o.name, eco: o.eco || null, matched: o._matched || 'exact' };
     } catch {}
+    // Enrich with the eco.json dataset (12k+ FEN-indexed named
+    // positions — same module that powers the Variation Report).
+    // Walk the game's plies FENs and pick the deepest-named one;
+    // if it's more specific than what detectOpening() returned, use
+    // it. Ensures saved games carry the same precise labels the
+    // Variation Report uses, which is what My Games displays.
+    //
+    // Fire-and-forget: if the ECO dataset isn't cached yet we don't
+    // block the archive on a 600 KB download. We start the fetch but
+    // proceed with whatever name we already have.
+    try {
+      EcoLookup.ensureLoaded().catch(() => {});
+      if (EcoLookup.isLoaded() && plies.length) {
+        const fens = plies.map(p => p.fen).filter(Boolean);
+        const hit = EcoLookup.deepestNamedInFens(fens);
+        if (hit && hit.entry) {
+          const precise = { name: hit.entry.name, eco: hit.entry.eco || null, matched: 'eco.json' };
+          // Prefer the eco.json label unless detectOpening found a
+          // STRICTLY LONGER name (which would only happen for custom
+          // user saves — rare). Also overwrite when we had nothing.
+          if (!opening || (precise.name && precise.name.length >= (opening.name?.length || 0))) {
+            opening = precise;
+          }
+        }
+      }
+    } catch (err) { console.warn('[archive] ECO enrichment failed', err); }
     // Auth code stores the logged-in user on window.__currentUser — the
     // old window.__user lookup always returned undefined, which is why
     // saved games had 'Guest' as the player name instead of the real
@@ -3185,11 +3211,13 @@ async function main() {
         ui.narrationText.innerHTML += suffix;
       }
     }
-    // ── Cloud autosave — if user is logged in, also save to Postgres
-    //    so they can sync across devices + download by date range.
+    // ── Cloud autosave — save to Postgres for BOTH logged-in users
+    //    (scoped by user_id) and guests (scoped by X-Guest-Id, a
+    //    localStorage-persisted random token). Either audience can
+    //    browse / filter / export their games via the My Games tab.
     //    The server-side ID is stashed on window so the 'Don't save'
-    //    button can DELETE it if user doesn't want to keep the game.
-    if (window.__currentUser) {
+    //    button can DELETE it if the user doesn't want to keep it.
+    {
       const mistakesCount = (plies.filter((p, i) => {
         if (!i) return false;
         const q = classifyAccuracy(plies[i - 1], p);
@@ -3199,17 +3227,23 @@ async function main() {
         if (!i) return false;
         return classifyAccuracy(plies[i - 1], p) === 'blunder';
       })).length;
+      const whitePlayerName =
+        window.__currentUser && practiceColor === 'white' ? userInfo.name :
+        window.__currentUser && mode === 'practice'       ? 'Stockfish' :
+        mode === 'practice' && practiceColor === 'white'  ? 'Guest' :
+        mode === 'practice'                                ? 'Stockfish' : null;
+      const blackPlayerName =
+        window.__currentUser && practiceColor === 'black' ? userInfo.name :
+        window.__currentUser && mode === 'practice'       ? 'Stockfish' :
+        mode === 'practice' && practiceColor === 'black'  ? 'Guest' :
+        mode === 'practice'                                ? 'Stockfish' : null;
       api.saveGame({
         pgn:            game.pgn,
         result:         game.result,
         opening_name:   opening?.name || null,
         opening_eco:    opening?.eco  || null,
-        white_name:     mode === 'practice'
-                         ? (practiceColor === 'white' ? userInfo.name : 'Stockfish')
-                         : null,
-        black_name:     mode === 'practice'
-                         ? (practiceColor === 'black' ? userInfo.name : 'Stockfish')
-                         : null,
+        white_name:     whitePlayerName,
+        black_name:     blackPlayerName,
         user_color:     userColor,
         mode:           mode || 'analysis',
         plies,
@@ -3217,7 +3251,7 @@ async function main() {
         blunders_count: blundersCount,
       }).then(res => {
         window.__lastSavedGameId = res.id;
-        console.log('[cloud] game saved to DB', { id: res.id });
+        console.log('[cloud] game saved to DB', { id: res.id, loggedIn: !!window.__currentUser });
         // Reveal the 'Don't save' button in the post-game panel.
         const dontSaveBtn = document.getElementById('btn-dont-save');
         if (dontSaveBtn) dontSaveBtn.hidden = false;
@@ -7357,12 +7391,9 @@ async function main() {
     }
 
     async function refreshStats() {
-      if (!window.__currentUser) {
-        statTotal.textContent = ''; statWins.textContent = '';
-        statLoss.textContent  = ''; statDraw.textContent = '';
-        statMist.textContent  = '';
-        return;
-      }
+      // Works for guests too now — api.statsGames sends X-Guest-Id when
+      // no session cookie is present, so the server scopes results to
+      // the caller regardless of auth state.
       try {
         const s = await api.statsGames(buildServerQuery());
         statTotal.textContent = `${s.total || 0} games`;
@@ -7372,6 +7403,9 @@ async function main() {
         statMist.textContent  = `${s.total_mistakes || 0} mistakes · ${s.total_blunders || 0} blunders`;
       } catch (err) {
         console.warn('[my-games] stats failed', err);
+        statTotal.textContent = ''; statWins.textContent = '';
+        statLoss.textContent  = ''; statDraw.textContent = '';
+        statMist.textContent  = '';
       }
     }
 
@@ -7423,24 +7457,10 @@ async function main() {
         state.page = 0;
         state.games = [];
       }
-      // GUEST mode — no login → show local archive only.
-      if (!window.__currentUser) {
-        const local = applyClientResultFilter(loadLocalGamesNormalized());
-        state.games = local;
-        state.total = local.length;
-        if (local.length) {
-          renderList();
-          // Small banner: tell the user how to also sync to cloud.
-          listEl.insertAdjacentHTML('afterbegin',
-            `<div class="mg-empty" style="font-size:11px;color:#9cdcfe;">💡 ${local.length} game(s) saved locally on this device. Sign in to sync across devices.</div>`);
-        } else {
-          listEl.innerHTML = '<div class="mg-empty">No games yet. Play a practice game — it auto-saves here.</div>';
-        }
-        listFoot.hidden = true;
-        return;
-      }
-      // LOGGED-IN — pull cloud games, plus any local archive entries
-      // that aren't yet in the cloud (user played offline / before login).
+      // Always try the cloud — guests get their guest-id-scoped games,
+      // logged-in users get their user-id-scoped games. Local archive
+      // (browser localStorage) is merged in for both populations so
+      // legacy offline games aren't lost.
       try {
         const q = buildServerQuery();
         q.limit  = state.pageSize;
@@ -7454,6 +7474,11 @@ async function main() {
         state.total = (res.total || 0) + local.length;
         state.games = append ? state.games.concat(merged) : merged;
         renderList();
+        // Guest hint: remind them signing in makes games portable.
+        if (!window.__currentUser && state.games.length && !append) {
+          listEl.insertAdjacentHTML('afterbegin',
+            `<div class="mg-empty" style="font-size:11px;color:#9cdcfe;">💡 Games saved to this device. Sign in to carry them across browsers.</div>`);
+        }
       } catch (err) {
         // Network failed — fall back to local so the user still sees something.
         const local = applyClientResultFilter(loadLocalGamesNormalized());
