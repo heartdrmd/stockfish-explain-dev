@@ -2544,6 +2544,7 @@ async function main() {
   }
   function _closeLearnPanel() {
     _learn.active = false;
+    document.body.classList.remove('learn-active', 'learn-phase-find');
     if (_learn.panel) { _learn.panel.remove(); _learn.panel = null; }
   }
   function _countMistakeTotal() {
@@ -2557,6 +2558,11 @@ async function main() {
   function _solvedCount() { return _learn.solvedPlies.size; }
   function _renderLearnPanel(state) {
     const p = _ensureLearnPanel();
+    // Phase-specific body class so CSS can hide chessground arrows
+    // while the user is in the FIND phase (don't peek the engine's
+    // green best-move arrow). All other phases ('eval', 'win',
+    // 'fail', 'view', 'end') let arrows render normally.
+    document.body.classList.toggle('learn-phase-find', state === 'find');
     const color = _learn.solverColor === 'w' ? 'White' : 'Black';
     const idx = _currentMistakeIndex();
     const total = _countMistakeTotal();
@@ -2571,7 +2577,7 @@ async function main() {
       inner = `
         <p class="retro-prompt">Find a better move for <strong>${color}</strong></p>
         <p class="retro-played">You played <strong>${_learn.playedSan || '?'}</strong>.<br>
-           <span style="opacity:0.6;font-size:11px;">Any move within ~4 % win-probability of the best is accepted.</span></p>
+           <span style="opacity:0.6;font-size:11px;">Any reasonable move within ~8 % win-probability of the best is accepted — you don't need to find the engine's exact pick.</span></p>
         <div class="retro-choices">
           <button class="retro-btn" id="learn-solution">View solution</button>
           <button class="retro-btn" id="learn-skip">Skip</button>
@@ -2591,12 +2597,17 @@ async function main() {
           <button class="retro-btn retro-continue" id="learn-next">Next ▶</button>
         </div>`;
     } else if (state === 'fail') {
+      const diffPct = _learn.lastDiffPct;
+      const diffLine = (diffPct != null && Number.isFinite(diffPct))
+        ? `<p class="retro-played" style="opacity:0.6;font-size:11px;">Win-chance dropped ${Math.abs(diffPct)} pts (threshold: 8 pts).</p>`
+        : '';
       inner = `
         <div class="retro-icon-line retro-fail">
           <span class="retro-icon">✗</span>
           <span>Not quite</span>
         </div>
         <p class="retro-played" style="opacity:0.8;">Try a different move — or click below to see the best.</p>
+        ${diffLine}
         <div class="retro-choices">
           <button class="retro-btn" id="learn-solution">View solution</button>
           <button class="retro-btn" id="learn-retry">Try again</button>
@@ -2736,6 +2747,9 @@ async function main() {
     const prev = plies[targetPly - 1];
     if (!prev || !cur) return;
     _learn.active = true;
+    // Body class lets CSS hide PV / score / engine arrows so the user
+    // can't peek the answer before they've tried.
+    document.body.classList.add('learn-active');
     _learn.targetPly = targetPly;
     _learn.prevFen = prev.fen;
     _learn.playedSan = cur.san;
@@ -2772,7 +2786,10 @@ async function main() {
       _renderLearnPanel('eval');
       // Compute post-move FEN from board state
       const postFen = board.fen();
-      // Ask engine to evaluate postFen
+      // Ask engine to evaluate postFen at 3s — was 1.5s, but the
+      // depth mismatch between this probe and the 5s verifier-pass
+      // eval (cached at _learn.bestBeforeCpWhite) created false
+      // failures. Longer probe = more stable comparison.
       engine.setMultiPV(1);
       const onBest = (ev2) => {
         engine.removeEventListener('bestmove', onBest);
@@ -2785,11 +2802,19 @@ async function main() {
         const before = _povWin(_learn.solverColor, _learn.bestBeforeCpWhite);
         const after  = _povWin(_learn.solverColor, cpAfterWhite);
         const diff = after - before;
-        if (diff > -0.04) _renderLearnPanel('win');
+        // Tolerance bumped from 0.04 → 0.08 (8 win-percentage-points).
+        // Matches "anything not noticeably worse than best" — was so
+        // strict that even the actual best move sometimes failed due
+        // to depth differences between the verifier eval and this
+        // 3-s probe. Now genuinely sound moves pass while real
+        // mistakes (≥0.08 win-% drop ≈ inaccuracy or worse) still fail.
+        // Stash diff so the 'win'/'fail' renderers can show how close.
+        _learn.lastDiffPct = Math.round(diff * 100);
+        if (diff > -0.08) _renderLearnPanel('win');
         else _renderLearnPanel('fail');
       };
       engine.addEventListener('bestmove', onBest);
-      engine.start(postFen, { movetime: 1500 });
+      engine.start(postFen, { movetime: 3000 });
     };
     board.addEventListener('move', onMove);
   }
@@ -3587,6 +3612,13 @@ async function main() {
   }
 
   function searchLimits() {
+    // Post-game free-analysis: once practice ends, run engine on
+    // INFINITE so it keeps deepening on whatever position the user
+    // navigates to (instead of stopping at the practice movetime
+    // budget). User asked for free analysis like a regular study.
+    if (document.body.classList.contains('practice-finished')) {
+      return { infinite: true };
+    }
     // Practice modal's fixed-seconds-per-move pulldown takes priority
     // when set — the user-friendliest way to control engine think time.
     try {
@@ -5785,6 +5817,23 @@ async function main() {
     if (document.body.classList.contains('practice-finished')) return;
     document.body.classList.add('practice-finished');
     document.body.classList.remove('practice-thinking');
+    // Free-analysis mode: user can now move BOTH sides on the live
+    // board so they can explore the position freely. Variations they
+    // play branch off the mainline tree; the original game's plies
+    // stay locked as gospel because archiveCurrentGame uses
+    // board._archiveSnapshot (taken below) instead of live history.
+    try {
+      board.playerColor = 'both';
+      // Refresh chessground's movable.color so it picks up the new
+      // value without waiting for a navigation event.
+      const turn = board.chess.turn() === 'w' ? 'white' : 'black';
+      board.cg.set({
+        turnColor: turn,
+        movable: { color: 'both', dests: toDestsFrom(board.chess) },
+      });
+    } catch (err) {
+      console.warn('[practice] could not switch to both-side movable', err);
+    }
     // Restore toolbar expansion after the game — BUT on mobile there's
     // barely room for it, so leave it collapsed even if the user had
     // it expanded before. Desktop keeps the old "restore if they had

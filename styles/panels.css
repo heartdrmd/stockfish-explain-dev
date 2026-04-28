@@ -1759,12 +1759,34 @@ body.practice-mode:not(.practice-finished) #pv-lines,
 body.practice-mode:not(.practice-finished) .pearl,
 body.practice-mode:not(.practice-finished) .meta-big,
 body.practice-mode:not(.practice-finished) .meta-nps,
-body.practice-mode:not(.practice-finished) .ceval-bar {
+body.practice-mode:not(.practice-finished) .ceval-bar,
+/* Learn-from-mistakes: hide the same engine output so the user can't
+   peek the answer in the score / PV / eval-bar while thinking. The
+   green best-move arrow on the board is also hidden — solver should
+   work it out themselves before clicking 'View solution'. */
+body.learn-active .pv-lines,
+body.learn-active #pv-lines,
+body.learn-active .pearl,
+body.learn-active .meta-big,
+body.learn-active .meta-nps,
+body.learn-active .ceval-bar {
   visibility: hidden;
+}
+/* Hide chessground's drawn arrows (lines and shapes) while learn
+   mode is active. The 'View solution' button explicitly draws a
+   green arrow — that should still be visible because by then the
+   user has chosen to see the answer. So we ONLY hide arrows in the
+   'find' phase. The renderer toggles a phase-specific class on
+   body to scope this rule. */
+body.learn-active.learn-phase-find cg-board > svg.cg-shapes,
+body.learn-active.learn-phase-find cg-board > svg.cg-shapes * {
+  display: none !important;
 }
 /* Preserve panel height so the layout doesn't jump when hiding */
 body.practice-mode:not(.practice-finished) .pv-lines,
-body.practice-mode:not(.practice-finished) #pv-lines { min-height: 60px; }
+body.practice-mode:not(.practice-finished) #pv-lines,
+body.learn-active .pv-lines,
+body.learn-active #pv-lines { min-height: 60px; }
 
 /* During a practice search the live-calc ticker updates ~10 times/s
    with variable-width text ('depth 18 · 5.2M nodes · 45.3M/s'). On
