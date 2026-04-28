@@ -2502,6 +2502,24 @@ async function main() {
     // while exploring the analysis on their own.
     userDismissed: false,
   };
+  // Auto-clear the learn-mode best-move arrow as soon as the user
+  // navigates / moves away from the position it was drawn for. Without
+  // this the green arrow stayed glued to the squares it pointed at,
+  // visible 3+ moves later regardless of the new position — a "stuck
+  // overlay" bug. Listens on both 'move' and 'nav' so any user-driven
+  // FEN change wipes it.
+  function _clearLearnArrowIfStale() {
+    if (!_learn.arrowFen) return;
+    try {
+      if (board.fen && board.fen() !== _learn.arrowFen) {
+        if (board.drawArrows) board.drawArrows([]);
+        _learn.arrowFen = null;
+      }
+    } catch {}
+  }
+  board.addEventListener('move', _clearLearnArrowIfStale);
+  board.addEventListener('nav',  _clearLearnArrowIfStale);
+
   // Per-FEN cache of the verifier's best-move discovery. Populated
   // by verifyMistakesAtMaxStrength as it iterates each pre-mistake
   // FEN. Consulted by _showSolution to render the green arrow + SAN
@@ -2568,6 +2586,10 @@ async function main() {
     _learn.userDismissed = true;   // suppresses pill-click auto-enter
     document.body.classList.remove('learn-active', 'learn-phase-find');
     if (_learn.panel) { _learn.panel.remove(); _learn.panel = null; }
+    // Wipe any best-move arrow we drew — close = nothing should
+    // linger on the board.
+    try { if (board.drawArrows) board.drawArrows([]); } catch {}
+    _learn.arrowFen = null;
   }
   function _countMistakeTotal() {
     return _findMistakePlies().length;
@@ -2733,6 +2755,11 @@ async function main() {
             brush: 'green',
             modifiers: { lineWidth: 22 },
           }]);
+          // Remember which FEN this arrow belongs to so we can auto-
+          // clear it the moment the user navigates / moves away.
+          // Without this the green arrow stayed glued to the board
+          // through 3+ subsequent moves, looking like a stuck overlay.
+          _learn.arrowFen = prev.fen;
         }
       } catch {}
       console.log('[learn-mode] solution served from verifier cache (no probe)', cachedBest);
@@ -2787,6 +2814,7 @@ async function main() {
               brush: 'green',
               modifiers: { lineWidth: 22 },
             }]);
+            _learn.arrowFen = probeFen;   // for auto-clear on nav
           }
         } catch {}
       }
