@@ -3981,8 +3981,12 @@ async function main() {
       let path = '';
       while (cur.children.length) {
         const main = cur.children[0];
+        const parentPath = path;            // path BEFORE we add main.id
         path += main.id;
-        mainline.push({ node: main, parentNode: cur, path, siblings: cur.children.slice(1) });
+        mainline.push({
+          node: main, parentNode: cur, path, parentPath,
+          siblings: cur.children.slice(1),
+        });
         cur = main;
       }
     }
@@ -4045,8 +4049,16 @@ async function main() {
       return parts.join(' ');
     }
 
-    // Build the table rows
+    // Build the table rows. After each row pair we insert any side-
+    // line variations as indented sub-rows so the user can SEE the
+    // alternate moves they explored, not just the mainline. Same data
+    // already flows into PGN export via tree.pgn() (parens for
+    // sidelines) — this brings the in-app notation into parity.
     const trs = [];
+    function variationRow(sibNode, parentNode, parentPath) {
+      const html = renderVariation(sibNode, parentNode, parentPath);
+      return `<tr class="mt-var-row"><td colspan="3" class="mt-var-cell">${html}</td></tr>`;
+    }
     for (let i = 0; i < mainline.length; i += 2) {
       const whiteEntry = mainline[i];
       const blackEntry = mainline[i + 1];
@@ -4056,14 +4068,28 @@ async function main() {
       tr += blackEntry ? mvCell(blackEntry.node, blackEntry.path) : `<td class="mt-move mt-empty"></td>`;
       tr += '</tr>';
       trs.push(tr);
+      // White-move variations show under THIS row.
+      for (const sib of (whiteEntry.siblings || [])) {
+        trs.push(variationRow(sib, whiteEntry.parentNode, whiteEntry.parentPath));
+      }
+      // Black-move variations show under THIS row too (right after
+      // any white variations) so they read as "white played X (or Y),
+      // black played P (or Q)".
+      if (blackEntry) {
+        for (const sib of (blackEntry.siblings || [])) {
+          trs.push(variationRow(sib, blackEntry.parentNode, blackEntry.parentPath));
+        }
+      }
     }
 
     ui.moveList.innerHTML = trs.length
       ? `<table class="move-table"><tbody>${trs.join('')}</tbody></table>`
       : '<div class="muted" style="padding: 8px 10px">No moves yet.</div>';
 
-    // Click / right-click handlers on every move cell
-    ui.moveList.querySelectorAll('.mt-move').forEach(el => {
+    // Click / right-click handlers on every move cell — both the
+    // mainline move <td>'s (.mt-move) AND the variation <span>'s
+    // (.mg-move) inside .mt-var-cell rows.
+    ui.moveList.querySelectorAll('.mt-move, .mg-move').forEach(el => {
       if (!el.dataset.path && el.dataset.path !== '') return;
       el.addEventListener('click', (e) => {
         e.stopPropagation();
