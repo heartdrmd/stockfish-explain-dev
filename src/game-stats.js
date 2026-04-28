@@ -73,6 +73,18 @@ export function computeGameStats(plies) {
   if (!Array.isArray(plies) || plies.length < 2) {
     return { white: finalise(white), black: finalise(black), byKind };
   }
+  // ACPL helpers — convert ply eval into mover's-POV centipawns,
+  // mapping mate scores to ±10000 cp. The cap below clamps the per-
+  // move loss to 1000 cp so a single forced-mate position doesn't
+  // distort the average (chess-engine industry standard cap; matches
+  // Chess.com, SCID, and lichess's PGN importer logic). Pure cp
+  // arithmetic — no win-chance proxy.
+  const ACPL_CAP_CP = 1000;
+  const cpForMover = (mover, p) => {
+    const sign = mover === 'white' ? 1 : -1;
+    if (p.mate != null) return Math.sign(p.mate) * sign > 0 ? +10000 : -10000;
+    return (p.cpWhite ?? 0) * sign;
+  };
   for (let i = 0; i < plies.length; i++) {
     // Move at ply i was played by the side whose turn it was BEFORE
     // that ply. With ply index starting at 0 representing the position
@@ -84,7 +96,14 @@ export function computeGameStats(plies) {
     const after = plies[i];
     const cls = classify(mover, before, after);
     const acc = moveAccuracy(Math.max(0, cls.drop));
-    const cpl = Math.max(0, Math.round(cls.drop * 250));   // rough cp-loss estimate from win-% drop
+    // True ACPL: drop in centipawns from mover's POV between
+    // pre-move and post-move evals (post-move is converted from
+    // opponent-STM POV to mover POV via a sign flip on cpWhite).
+    // Capped at 1000 cp / move so blow-ups in lost positions don't
+    // dominate the average. Industry-standard formula.
+    const cpBefore = cpForMover(mover, before);
+    const cpAfter  = cpForMover(mover, after);
+    const cpl = Math.max(0, Math.min(ACPL_CAP_CP, cpBefore - cpAfter));
     const bucket = mover === 'white' ? white : black;
     bucket.moves++;
     bucket._sumLoss += cpl;
