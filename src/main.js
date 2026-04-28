@@ -3576,15 +3576,40 @@ async function main() {
                   }
                 } else if (ev.detail.stuck) {
                   // Engine was wedged — watchdog fired a synthetic
-                  // bestmove to unlatch us. Tell the user clearly + let
-                  // them recover. The engine instance itself will auto-
-                  // recover on the NEXT search via the silent-engine
-                  // detector in engine.js.
-                  console.error('[practice] engine STUCK — synthetic bestmove received, asking user to restart');
-                  ui.narrationText.innerHTML =
-                    '⚠ Engine got stuck on this position. Click ' +
-                    '<strong>🔁 Same opening again</strong> (in the practice panel when the game ends) ' +
-                    'or press <kbd>R</kbd> to resign and start fresh.';
+                  // bestmove to unlatch us. Try one auto-recovery via
+                  // switchEngineFlavor (reboot of the same flavor —
+                  // proven path for clearing a hung WASM worker), then
+                  // re-fire analysis so the engine takes its turn.
+                  // ONE attempt only; if recovery also stalls, surface
+                  // the manual-restart prompt.
+                  console.error('[practice] engine STUCK — attempting auto-recovery');
+                  ui.narrationText.innerHTML = '⚠ Engine wedged — recovering automatically…';
+                  if (!window.__practiceAutoRecoveryTried) {
+                    window.__practiceAutoRecoveryTried = true;
+                    (async () => {
+                      try {
+                        const flavor = ui.selectFlavor.value;
+                        if (typeof window.__switchEngineFlavor === 'function') {
+                          await window.__switchEngineFlavor(flavor);
+                        }
+                        // Clear the one-shot guard so a future SEPARATE
+                        // wedge can also auto-recover (just not the same
+                        // one again in a loop).
+                        setTimeout(() => { window.__practiceAutoRecoveryTried = false; }, 30_000);
+                        ui.narrationText.innerHTML = '✓ Engine recovered. It\'s thinking now…';
+                        try { fireAnalysis(); } catch {}
+                      } catch (err) {
+                        console.error('[practice] auto-recovery failed', err);
+                        ui.narrationText.innerHTML =
+                          '⚠ Engine got stuck and auto-recovery failed. Press <kbd>R</kbd> to resign + start fresh, ' +
+                          'or pick a different engine flavor from the toolbar dropdown.';
+                      }
+                    })();
+                  } else {
+                    ui.narrationText.innerHTML =
+                      '⚠ Engine got stuck again — auto-recovery already used. Press <kbd>R</kbd> to resign + start fresh, ' +
+                      'or pick a different engine flavor from the toolbar dropdown.';
+                  }
                 } else {
                   console.log('[practice] engine returned (none) — probably game over');
                   ui.narrationText.innerHTML = 'Engine has no legal moves — game over.';

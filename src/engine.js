@@ -331,6 +331,12 @@ export class Engine extends EventTarget {
   /** Tear down the worker — for switching engine flavor. */
   terminate() {
     this.stop();
+    // Cancel any pending watchdog / health-check timers so they don't
+    // fire AFTER the worker is gone (would either be a no-op or could
+    // surface a synthetic-stuck event from a dead instance).
+    if (this._watchdogId)    { clearTimeout(this._watchdogId);    this._watchdogId = 0; }
+    if (this._healthCheckId) { clearTimeout(this._healthCheckId); this._healthCheckId = 0; }
+    this._bestmoveAwaited = false;
     if (this.worker) { this.worker.terminate(); this.worker = null; }
     this.ready = false;
   }
@@ -543,26 +549,47 @@ export class Engine extends EventTarget {
 
     // Bestmove watchdog (lichess lacks this — see lila #11373 stuck-
     // engine reports). If bestmove doesn't arrive in a reasonable
-    // window, emit a synthetic bestmove so downstream callers don't
-    // hang forever. Budget: 3x expected movetime for bounded searches,
-    // 60 s for infinite searches (rare in real UX — stop is sent on
-    // move/nav/etc).
+    // window, take action so downstream callers don't hang forever.
+    //
+    // Two-tier policy (refined after a "stuck on practice start"
+    // false-positive report):
+    //   1. WATCHDOG TIMEOUT — at budget. Always force a stop().
+    //      If the engine has been responding (info lines received),
+    //      the stop forces it to flush its current best. We DO NOT
+    //      emit a synthetic stuck-bestmove in that case — the engine
+    //      isn't stuck, just slow. The stop-elicited bestmove arrives
+    //      naturally and clears _bestmoveAwaited.
+    //   2. SYNTHETIC EMIT — only if the engine never sent a single
+    //      info line (truly silent / wedged at boot). This is the
+    //      one signal we can trust to mean "the worker is dead".
+    //
+    // Budget bumped 3x → 5x movetime to give legitimately slow boots
+    // (108 MB net cold-cache, mobile Safari) plenty of room to complete
+    // before the watchdog even fires.
     if (this._watchdogId) clearTimeout(this._watchdogId);
     const budget = opts.movetime
-      ? Math.max(3000, opts.movetime * 3)
+      ? Math.max(5000, opts.movetime * 5)
       : (opts.depth ? 60_000 : 60_000);
     this._watchdogId = setTimeout(() => {
       if (!this._bestmoveAwaited) return;
-      console.warn('[engine] bestmove watchdog fired — forcing stop');
+      const responsive = (this._infoReceived || 0) > 0;
+      console.warn('[engine] bestmove watchdog fired — forcing stop', {
+        responsive, infoReceived: this._infoReceived || 0,
+      });
       this.stop();
-      // If stop itself hangs (worker wedged, no bestmove reply),
-      // dispatch a synthetic one so callers unlatch. Consumers should
-      // treat best=null as "engine stuck" and recover. We check
-      // _bestmoveAwaited (NOT .searching, which stop() just cleared
-      // unconditionally on the JS side).
+      // Only fire the synthetic-stuck bestmove if the engine was
+      // SILENT (zero info lines). A responsive-but-slow engine will
+      // emit its own bestmove in response to our stop() — wait for it.
       setTimeout(() => {
         if (!this._bestmoveAwaited) return;
-        console.error('[engine] worker appears wedged — emitting synthetic bestmove');
+        if (responsive) {
+          // Still waiting on a real bestmove from the stop. Give it
+          // another 3 s; if it never comes, we'll let the next search
+          // start clear _bestmoveAwaited via _doStart.
+          console.warn('[engine] watchdog: responsive engine still owes bestmove after stop — waiting');
+          return;
+        }
+        console.error('[engine] worker appears wedged (silent) — emitting synthetic bestmove');
         this._bestmoveAwaited = false;
         this.searching = false;
         this.dispatchEvent(new CustomEvent('bestmove', {
