@@ -2799,20 +2799,24 @@ async function main() {
       if (!_learn.active) { board.removeEventListener('move', onMove); return; }
       board.removeEventListener('move', onMove);
       _renderLearnPanel('eval');
-      // Compute post-move FEN from board state
+      // Compute the user's UCI move + post-move FEN from board state.
+      // The move event detail contains a chess.js move object with
+      // from/to/promotion fields — turn it into a UCI string for the
+      // searchmoves probe below.
+      const mv = ev.detail && ev.detail.move;
+      const userUci = (mv && mv.from && mv.to)
+        ? mv.from + mv.to + (mv.promotion || '')
+        : null;
       const postFen = board.fen();
       // ── CACHE-FIRST GRADING ───────────────────────────────────
-      // verifyMistakesAtMaxStrength runs MultiPV=5 at each pre-
+      // verifyMistakesAtMaxStrength runs MultiPV=20 at each pre-
       // mistake FEN, so fenEvalCache already holds an eval for
-      // EVERY one of the top-5 post-move FENs. If the user picks
-      // one of those moves (very likely — most "reasonable" guesses
-      // ARE in the top 5), grade it instantly using the cached cp.
-      // Falls through to a fresh probe only when the user plays
-      // something the verifier didn't see (off-the-charts move).
+      // up to 20 post-move FENs. With ~30-40 legal moves typical,
+      // most reasonable user guesses ARE in those top 20 → instant
+      // grading from cache, no probe needed.
       const cached = fenEvalCache.get(postFen);
       // Require depth ≥ 14 from the verifier pass to use the cache —
-      // a stale shallow eval would re-introduce the depth-mismatch
-      // false-fails this whole change is meant to eliminate.
+      // a stale shallow eval would re-introduce depth-mismatch fails.
       if (cached && cached.cpWhite != null && (cached.depth || 0) >= 14) {
         const before = _povWin(_learn.solverColor, _learn.bestBeforeCpWhite);
         const after  = _povWin(_learn.solverColor, cached.cpWhite);
@@ -2825,38 +2829,62 @@ async function main() {
         else _renderLearnPanel('fail');
         return;
       }
-      // Fall-back path: user played a move the verifier didn't
-      // pre-evaluate. Probe just this position at 3 s with multiPV=1
-      // (only need the top line for the cp). Save + restore the
-      // user's preferred multiPV so post-game analysis still shows
-      // their chosen number of lines.
+      // ── CACHE MISS → searchmoves probe ─────────────────────────
+      // Lichess-style: instead of probing the whole post-FEN (which
+      // analyses opponent's reply), probe the PRE-FEN constrained
+      // to ONLY the user's move via UCI `searchmoves`. Stockfish
+      // dedicates 100% of its 3 s budget to the user's chosen
+      // continuation, giving a more precise eval at greater depth
+      // than splitting time across all post-FEN replies. Falls back
+      // to plain post-FEN probe if the move can't be expressed (no
+      // UCI from the move event — should never happen in practice).
       const savedMultiPV = engine.multipv;
       engine.setMultiPV(1);
       const onBest = (ev2) => {
         engine.removeEventListener('bestmove', onBest);
         try { engine.setMultiPV(savedMultiPV); } catch {}
-        // Closed panel while probing? Don't resurrect it.
         if (!_learn.active) {
           console.log('[learn-mode] onMove bestmove arrived after close — skipping render');
           return;
         }
         const hist = engine.history || [];
         const last = hist[hist.length - 1];
-        const cpAfter = last?.score ?? 0;
-        const stmAfter = postFen.split(' ')[1];
-        const cpAfterWhite = stmAfter === 'w' ? cpAfter : -cpAfter;
-        // Winning-chances delta from solver's POV.
+        const cp = last?.score ?? 0;
+        let cpAfterWhite;
+        if (userUci) {
+          // searchmoves probe: score is from preFen's STM POV
+          // representing the eval AFTER user's move. Convert to
+          // white POV via the prev (solver-to-move) FEN.
+          const preStm = _learn.prevFen.split(' ')[1];
+          cpAfterWhite = preStm === 'w' ? cp : -cp;
+        } else {
+          // Fallback: post-FEN probe; score is from postFen's STM POV.
+          const stmAfter = postFen.split(' ')[1];
+          cpAfterWhite = stmAfter === 'w' ? cp : -cp;
+        }
+        // Cache the result so a retry of the SAME move is instant
+        // next time. Mirrors how lichess caches local ceval results
+        // per FEN per session.
+        try {
+          const depth = last?.depth || 0;
+          const prev = fenEvalCache.get(postFen);
+          if (!prev || (prev.depth || 0) < depth) {
+            fenEvalCache.set(postFen, { cpWhite: cpAfterWhite, mate: null, depth });
+          }
+        } catch {}
         const before = _povWin(_learn.solverColor, _learn.bestBeforeCpWhite);
         const after  = _povWin(_learn.solverColor, cpAfterWhite);
         const diff = after - before;
-        // Tolerance 0.08 (8 win-percentage-points). Stash diff so
-        // the 'win'/'fail' renderers can show how close.
         _learn.lastDiffPct = Math.round(diff * 100);
         if (diff > -0.08) _renderLearnPanel('win');
         else _renderLearnPanel('fail');
       };
       engine.addEventListener('bestmove', onBest);
-      engine.start(postFen, { movetime: 3000 });
+      if (userUci) {
+        engine.start(_learn.prevFen, { movetime: 3000, searchmoves: [userUci] });
+      } else {
+        engine.start(postFen, { movetime: 3000 });
+      }
     };
     board.addEventListener('move', onMove);
   }
@@ -3118,17 +3146,23 @@ async function main() {
     try { if (typeof updateLearnButton === 'function') updateLearnButton(); } catch {}
     try { engine.stop(); } catch {}
     engine.setSkill(20);
-    // MultiPV=5 during verify so the engine returns the top 5
-    // candidate moves at each pre-mistake position. The thinking
-    // listener auto-populates fenEvalCache with the post-move FEN +
-    // cp eval for each of those top 5. Net effect: when the user
-    // plays one of the top-5 moves in learn mode, we already have
-    // its eval cached — no re-probe required, instant grading.
-    engine.setMultiPV(5);
+    // MultiPV=20 during verify so the engine returns top 20 candidate
+    // moves at each pre-mistake position (was 5). The thinking listener
+    // auto-populates fenEvalCache with the post-move FEN + cp eval for
+    // EACH of those 20 candidates. With ~30-40 legal moves in a typical
+    // middlegame position, top-20 covers virtually every reasonable
+    // move a human would play — so cache hits dominate over fresh
+    // probes in learn mode.
+    //
+    // Tradeoff vs MultiPV=5: each line gets ~depth 18-20 instead of
+    // depth 22-25 in the same 5 s budget. Plenty of depth for
+    // grading purposes; the move's quality classification is stable
+    // long before depth 25.
+    engine.setMultiPV(20);
     try {
       for (const fen of fens) {
         try {
-          await AICoach.probeEngine(engine, fen, 0, 5, 5000);  // 5 s, skill 20, multipv 5
+          await AICoach.probeEngine(engine, fen, 0, 20, 5000);  // 5 s, skill 20, multipv 20
         } catch (err) {
           console.warn('[verify] probe failed', fen, err);
         }
