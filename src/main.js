@@ -2713,6 +2713,14 @@ async function main() {
       }
       engine.removeEventListener('bestmove', onBest);
       try { engine.setMultiPV(savedMultiPV); } catch {}
+      // If the user closed the panel while we were probing, do NOT
+      // resurrect it. Without this guard the panel would silently
+      // pop back up the moment the probe finished, "minutes later"
+      // looking like a random reappearance bug.
+      if (!_learn.active) {
+        console.log('[learn-mode] _showSolution bestmove arrived after close — skipping render');
+        return;
+      }
       const hist = engine.history || [];
       const last = hist[hist.length - 1];
       const cp = last?.score ?? 0;
@@ -2827,6 +2835,11 @@ async function main() {
       const onBest = (ev2) => {
         engine.removeEventListener('bestmove', onBest);
         try { engine.setMultiPV(savedMultiPV); } catch {}
+        // Closed panel while probing? Don't resurrect it.
+        if (!_learn.active) {
+          console.log('[learn-mode] onMove bestmove arrived after close — skipping render');
+          return;
+        }
         const hist = engine.history || [];
         const last = hist[hist.length - 1];
         const cpAfter = last?.score ?? 0;
@@ -3068,6 +3081,20 @@ async function main() {
   // entry for the candidate's FEN (and its predecessor) so
   // _findMistakePlies reclassifies naturally on the next call.
   async function verifyMistakesAtMaxStrength(onProgress) {
+    // Idempotency + concurrency guard. The user-clicked Learn flow
+    // and the auto-fired post-game flow can both call this; running
+    // them in parallel had each iteration's engine.start stomp on
+    // the other's, leaving probes silent (infoReceived=0) and the
+    // cache empty. Now: if a verify pass is already in flight, just
+    // wait for it; if a retrospective sweep is running, wait for
+    // that too — both share the same engine, can't overlap.
+    while (window.__mistakesVerifying || sweepRunning) {
+      console.log('[verify] another pass in progress — waiting', {
+        verifying: !!window.__mistakesVerifying,
+        sweeping:  sweepRunning,
+      });
+      await new Promise(r => setTimeout(r, 250));
+    }
     const candidates = _findMistakePlies();
     if (!candidates.length) return 0;
     const plies = collectTimelinePlies();
