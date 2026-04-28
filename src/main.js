@@ -2694,6 +2694,12 @@ async function main() {
     if (!prev || !cur) return;
     if (board.goToPly) board.goToPly(_learn.targetPly - 1);
     // Fast engine probe at pre-mistake fen, 1.5 s.
+    // Save user's preferred multipv so we can restore it after — the
+    // solution-probe needs only the #1 line, but leaving multipv at
+    // 1 would silently truncate the user's post-game analysis to a
+    // single line on every subsequent search. Same fix used in the
+    // onMove handler.
+    const savedMultiPV = engine.multipv;
     engine.setMultiPV(1);
     // Snapshot the fen we're probing at. If a concurrent call (e.g.
     // fireAnalysis) interrupts us, engine.currentFen will no longer
@@ -2706,6 +2712,7 @@ async function main() {
         return;   // wait for the real one (we'll re-fire if no arrow appears)
       }
       engine.removeEventListener('bestmove', onBest);
+      try { engine.setMultiPV(savedMultiPV); } catch {}
       const hist = engine.history || [];
       const last = hist[hist.length - 1];
       const cp = last?.score ?? 0;
@@ -2786,13 +2793,40 @@ async function main() {
       _renderLearnPanel('eval');
       // Compute post-move FEN from board state
       const postFen = board.fen();
-      // Ask engine to evaluate postFen at 3s — was 1.5s, but the
-      // depth mismatch between this probe and the 5s verifier-pass
-      // eval (cached at _learn.bestBeforeCpWhite) created false
-      // failures. Longer probe = more stable comparison.
+      // ── CACHE-FIRST GRADING ───────────────────────────────────
+      // verifyMistakesAtMaxStrength runs MultiPV=5 at each pre-
+      // mistake FEN, so fenEvalCache already holds an eval for
+      // EVERY one of the top-5 post-move FENs. If the user picks
+      // one of those moves (very likely — most "reasonable" guesses
+      // ARE in the top 5), grade it instantly using the cached cp.
+      // Falls through to a fresh probe only when the user plays
+      // something the verifier didn't see (off-the-charts move).
+      const cached = fenEvalCache.get(postFen);
+      // Require depth ≥ 14 from the verifier pass to use the cache —
+      // a stale shallow eval would re-introduce the depth-mismatch
+      // false-fails this whole change is meant to eliminate.
+      if (cached && cached.cpWhite != null && (cached.depth || 0) >= 14) {
+        const before = _povWin(_learn.solverColor, _learn.bestBeforeCpWhite);
+        const after  = _povWin(_learn.solverColor, cached.cpWhite);
+        const diff = after - before;
+        _learn.lastDiffPct = Math.round(diff * 100);
+        console.log('[learn-mode] graded from cache (no probe)', {
+          postFen: postFen.slice(0, 30) + '…', cachedCp: cached.cpWhite, depth: cached.depth, diff,
+        });
+        if (diff > -0.08) _renderLearnPanel('win');
+        else _renderLearnPanel('fail');
+        return;
+      }
+      // Fall-back path: user played a move the verifier didn't
+      // pre-evaluate. Probe just this position at 3 s with multiPV=1
+      // (only need the top line for the cp). Save + restore the
+      // user's preferred multiPV so post-game analysis still shows
+      // their chosen number of lines.
+      const savedMultiPV = engine.multipv;
       engine.setMultiPV(1);
       const onBest = (ev2) => {
         engine.removeEventListener('bestmove', onBest);
+        try { engine.setMultiPV(savedMultiPV); } catch {}
         const hist = engine.history || [];
         const last = hist[hist.length - 1];
         const cpAfter = last?.score ?? 0;
@@ -2802,13 +2836,8 @@ async function main() {
         const before = _povWin(_learn.solverColor, _learn.bestBeforeCpWhite);
         const after  = _povWin(_learn.solverColor, cpAfterWhite);
         const diff = after - before;
-        // Tolerance bumped from 0.04 → 0.08 (8 win-percentage-points).
-        // Matches "anything not noticeably worse than best" — was so
-        // strict that even the actual best move sometimes failed due
-        // to depth differences between the verifier eval and this
-        // 3-s probe. Now genuinely sound moves pass while real
-        // mistakes (≥0.08 win-% drop ≈ inaccuracy or worse) still fail.
-        // Stash diff so the 'win'/'fail' renderers can show how close.
+        // Tolerance 0.08 (8 win-percentage-points). Stash diff so
+        // the 'win'/'fail' renderers can show how close.
         _learn.lastDiffPct = Math.round(diff * 100);
         if (diff > -0.08) _renderLearnPanel('win');
         else _renderLearnPanel('fail');
@@ -3050,6 +3079,7 @@ async function main() {
     const total = fens.size;
     let done = 0;
     const savedSkill = engine.skill;
+    const savedMultiPV = engine.multipv;
     const wasMuted = window.__engineMuted === true;
     window.__engineMuted = true;
     window.__mistakesVerifying = true;
@@ -3061,10 +3091,17 @@ async function main() {
     try { if (typeof updateLearnButton === 'function') updateLearnButton(); } catch {}
     try { engine.stop(); } catch {}
     engine.setSkill(20);
+    // MultiPV=5 during verify so the engine returns the top 5
+    // candidate moves at each pre-mistake position. The thinking
+    // listener auto-populates fenEvalCache with the post-move FEN +
+    // cp eval for each of those top 5. Net effect: when the user
+    // plays one of the top-5 moves in learn mode, we already have
+    // its eval cached — no re-probe required, instant grading.
+    engine.setMultiPV(5);
     try {
       for (const fen of fens) {
         try {
-          await AICoach.probeEngine(engine, fen, 0, 1, 5000);  // 5 s, skill 20
+          await AICoach.probeEngine(engine, fen, 0, 5, 5000);  // 5 s, skill 20, multipv 5
         } catch (err) {
           console.warn('[verify] probe failed', fen, err);
         }
@@ -3073,6 +3110,7 @@ async function main() {
       }
     } finally {
       engine.setSkill(savedSkill);
+      engine.setMultiPV(savedMultiPV);
       window.__engineMuted = wasMuted;
       window.__mistakesVerifying = false;
       document.body.classList.remove('mistakes-verifying');
