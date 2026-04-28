@@ -2450,7 +2450,12 @@ async function main() {
       const gameOver = document.body.classList.contains('practice-finished') ||
                        document.body.classList.contains('analysis-archived') ||
                        !document.body.classList.contains('practice-mode');
-      if (isOverClass && gameOver && typeof window.__enterLearnMode === 'function') {
+      // Auto-enter learn mode on pill click is the default — but
+      // skip it if the user explicitly closed the panel earlier this
+      // session (userDismissed). They get plain navigation instead;
+      // clicking the 🎓 button re-arms auto-enter.
+      const shouldAutoEnter = isOverClass && gameOver && !_learn.userDismissed;
+      if (shouldAutoEnter && typeof window.__enterLearnMode === 'function') {
         window.__enterLearnMode(ply);
       } else if (board.goToPly) {
         board.goToPly(ply);
@@ -2488,7 +2493,23 @@ async function main() {
     // a mistake permanently for this session instead of re-visiting
     // on the next cycle.
     solvedPlies: new Set(),
+    // Set true when the user explicitly closes the panel via X.
+    // While true, accuracy-pill clicks do NOT re-enter learn mode
+    // (just navigate to the ply). The flag clears on:
+    //   * Clicking the 🎓 Learn from your mistakes button
+    //   * Starting a new game / loading another from My Games
+    // So the user can opt back in but isn't surprise-popped into it
+    // while exploring the analysis on their own.
+    userDismissed: false,
   };
+  // Per-FEN cache of the verifier's best-move discovery. Populated
+  // by verifyMistakesAtMaxStrength as it iterates each pre-mistake
+  // FEN. Consulted by _showSolution to render the green arrow + SAN
+  // instantly with no live probe — turns "Show solution" from a 1.5-s
+  // wait into a single frame.
+  //   key:   pre-mistake FEN
+  //   value: { uci, san, cpWhite, evalFmt, depth }
+  const _verifierBest = new Map();
   const _cpToWinChance = (cp) => {
     if (cp == null) return 0;
     return 2 / (1 + Math.exp(-0.004 * cp)) - 1;
@@ -2544,6 +2565,7 @@ async function main() {
   }
   function _closeLearnPanel() {
     _learn.active = false;
+    _learn.userDismissed = true;   // suppresses pill-click auto-enter
     document.body.classList.remove('learn-active', 'learn-phase-find');
     if (_learn.panel) { _learn.panel.remove(); _learn.panel = null; }
   }
@@ -2693,12 +2715,33 @@ async function main() {
     const prev = plies[_learn.targetPly - 1];
     if (!prev || !cur) return;
     if (board.goToPly) board.goToPly(_learn.targetPly - 1);
-    // Fast engine probe at pre-mistake fen, 1.5 s.
-    // Save user's preferred multipv so we can restore it after — the
-    // solution-probe needs only the #1 line, but leaving multipv at
-    // 1 would silently truncate the user's post-game analysis to a
-    // single line on every subsequent search. Same fix used in the
-    // onMove handler.
+    // ── CACHE-FIRST SOLUTION ──────────────────────────────────────
+    // The verify pass already searched this FEN at MultiPV=20 + 5 s
+    // and stored the engine's top move via _verifierBest. If we
+    // have that, render the panel + draw the arrow immediately —
+    // no probe, no spinner, no wait.
+    const cachedBest = _verifierBest.get(prev.fen);
+    if (cachedBest) {
+      _learn.bestSan = cachedBest.san;
+      _learn.bestEvalFmt = cachedBest.evalFmt;
+      _learn.solvedPlies.add(_learn.targetPly);
+      try {
+        if (board.drawArrows && board.fen() === prev.fen) {
+          board.drawArrows([{
+            orig: cachedBest.uci.slice(0, 2),
+            dest: cachedBest.uci.slice(2, 4),
+            brush: 'green',
+            modifiers: { lineWidth: 22 },
+          }]);
+        }
+      } catch {}
+      console.log('[learn-mode] solution served from verifier cache (no probe)', cachedBest);
+      _renderLearnPanel('view');
+      return;
+    }
+    // Fall-back probe — happens when verify hasn't run yet (e.g. the
+    // user clicked Show solution before verification completed). Save
+    // user's preferred multipv so we can restore it after.
     const savedMultiPV = engine.multipv;
     engine.setMultiPV(1);
     // Snapshot the fen we're probing at. If a concurrent call (e.g.
@@ -2898,6 +2941,9 @@ async function main() {
   const learnCountBadge = document.getElementById('learn-btn-count');
   if (btnLearnMistakes) {
     btnLearnMistakes.addEventListener('click', async () => {
+      // Explicit click = user opting in again, so re-arm pill-click
+      // auto-enter that _closeLearnPanel suppressed earlier.
+      _learn.userDismissed = false;
       // Verify before walking: re-probe each candidate mistake at
       // max strength + 5 s to filter false positives. This runs
       // automatically at the end of a finished practice game but
@@ -3116,12 +3162,35 @@ async function main() {
     // cache empty. Now: if a verify pass is already in flight, just
     // wait for it; if a retrospective sweep is running, wait for
     // that too — both share the same engine, can't overlap.
-    while (window.__mistakesVerifying || sweepRunning) {
+    // If a sweep is in flight, signal it to abort AND force-stop the
+    // engine. The previous "passive wait" approach hung forever when
+    // sweep got stuck inside a probeEngine call whose bestmove was
+    // suppressed as stale (pendingGos > 0). engine.stop() shakes the
+    // engine into emitting a real bestmove which lets the dangling
+    // probe resolve, then sweepAbort lets the sweep loop exit cleanly.
+    if (sweepRunning) {
+      console.log('[verify] sweep in progress — aborting + nudging engine');
+      sweepAbort = true;
+      try { engine.stop(); } catch {}
+    }
+    // Bounded wait — give sweep up to 3 s to exit gracefully.
+    // After that, push through anyway; verify's own probes will queue
+    // and the suppressed-bestmove logic in engine.js will sort the
+    // overlap out (each probe sets _pendingGos+1, decrements on
+    // bestmove arrival).
+    const waitDeadline = Date.now() + 3000;
+    while ((window.__mistakesVerifying || sweepRunning) && Date.now() < waitDeadline) {
       console.log('[verify] another pass in progress — waiting', {
         verifying: !!window.__mistakesVerifying,
         sweeping:  sweepRunning,
       });
-      await new Promise(r => setTimeout(r, 250));
+      await new Promise(r => setTimeout(r, 200));
+    }
+    if (sweepRunning || window.__mistakesVerifying) {
+      console.warn('[verify] proceeding despite stale lock', {
+        verifying: !!window.__mistakesVerifying,
+        sweeping:  sweepRunning,
+      });
     }
     const candidates = _findMistakePlies();
     if (!candidates.length) return 0;
@@ -3162,7 +3231,30 @@ async function main() {
     try {
       for (const fen of fens) {
         try {
-          await AICoach.probeEngine(engine, fen, 0, 20, 5000);  // 5 s, skill 20, multipv 20
+          // 5 s, skill 20, multipv 20 — also captures top moves so
+          // _showSolution can render the answer instantly with no
+          // re-probe. The result.lines[] gives us the engine's #1
+          // pick + its eval for THIS pre-mistake fen.
+          const result = await AICoach.probeEngine(engine, fen, 0, 20, 5000);
+          const top = result?.lines?.[0];
+          if (top && top.uci) {
+            const stm = fen.split(' ')[1];
+            // result.lines score is from STM POV — convert to white POV
+            const cpStm = top.scoreKind === 'mate'
+              ? (top.score > 0 ? 10000 : -10000)
+              : top.score;
+            const cpWhite = stm === 'w' ? cpStm : -cpStm;
+            const evalFmt = top.scoreKind === 'mate'
+              ? `#${top.score}`
+              : `${cpStm >= 0 ? '+' : ''}${(cpStm/100).toFixed(2)}`;
+            _verifierBest.set(fen, {
+              uci: top.uci,
+              san: top.san || top.uci,
+              cpWhite,
+              evalFmt,
+              depth: result.depth || 0,
+            });
+          }
         } catch (err) {
           console.warn('[verify] probe failed', fen, err);
         }
@@ -3215,7 +3307,21 @@ async function main() {
           if (onProgress) onProgress(done, targets.length);
           continue;
         }
-        try { await AICoach.probeEngine(engine, t.fen, minDepth, 1, movetimeMs); }
+        // Probe with a hard timeout — if probeEngine hangs (we've seen
+        // this when its bestmove gets suppressed as stale due to an
+        // overlapping infinite-search start), don't let it freeze the
+        // sweep + the verify mutex behind it. After the timeout we
+        // call engine.stop() to nudge a real bestmove out and let the
+        // loop continue. 12 s budget = generous for depth-12 probes.
+        try {
+          const probeP = AICoach.probeEngine(engine, t.fen, minDepth, 1, movetimeMs);
+          const timer = new Promise(res => setTimeout(() => res('__timeout__'), 12_000));
+          const winner = await Promise.race([probeP, timer]);
+          if (winner === '__timeout__') {
+            console.warn('[sweep] probe timed out — stopping engine + skipping', t.fen);
+            try { engine.stop(); } catch {}
+          }
+        }
         catch (err) { console.warn('[sweep] probe failed', t.fen, err); }
         done++;
         if (onProgress) onProgress(done, targets.length);
@@ -3795,6 +3901,10 @@ async function main() {
     // starts. The practice card hides via CSS once the class is gone.
     practiceColor = null;
     document.body.classList.remove('practice-mode', 'practice-thinking', 'practice-finished', 'analysis-archived');
+    // Re-arm learn-mode auto-enter on the next game + clear the
+    // verifier-best cache (different game = different positions).
+    if (typeof _learn !== 'undefined') _learn.userDismissed = false;
+    if (typeof _verifierBest !== 'undefined') _verifierBest.clear();
     const pActions = document.getElementById('practice-actions');
     if (pActions) pActions.hidden = true;
     clearDraft();
