@@ -1139,37 +1139,55 @@ async function main() {
   async function switchEngineFlavor(targetFlavor) {
     const spec = ENGINE_FLAVORS[targetFlavor];
     const targetIsMT = !!(spec && spec.threaded);
+    // Block live `fireAnalysis` from sending searches to the engine
+    // while we're rebuilding it. Cleared in the finally block below.
+    // Also clear the engineReady boolean so any code path still
+    // gating on it (rather than engine.ready directly) sees the
+    // true state during recovery — fixes the drift bug where the
+    // boolean stayed true after a runtime worker crash.
+    window.__engineRecovering = true;
+    engineReady = false;
     try { engine.terminate?.(); } catch {}
     // Give the browser time to actually release the old MT worker's
     // pthread children + SharedArrayBuffer. 200 ms wasn't enough —
-    // new log showed lite-single → avrukh still going silent.
-    // 1500 ms matches the human-click delay of a manual ritual that
-    // reliably works.
+    // earlier log showed lite-single → avrukh still going silent.
     await new Promise(r => setTimeout(r, 1500));
-    if (targetIsMT) {
-      console.log('[engine] ritual: lite-single → ' + targetFlavor);
+    try {
+      if (targetIsMT) {
+        console.log('[engine] ritual: PRIVATE lite-single → ' + targetFlavor);
+        // ── PRIVATE WARMUP ENGINE (consultation feedback) ──────────
+        // The warmup engine used to be assigned to the global
+        // `engine` variable AND wired into the explainer / capture
+        // listeners. That created a race: while the warmup was
+        // alive, board events could route searches to it; the
+        // ritual then terminated it mid-search, losing the request.
+        // Result: "engine never moves" after a recovery cycle.
+        //
+        // Fix: warmup is now strictly LOCAL. Never assigned to
+        // `engine`, never wired to listeners. It boots, satisfies
+        // the empirical "MT-after-MT silent wedge needs a single-
+        // thread warmup first" requirement, and terminates — all
+        // invisible to the rest of the app.
+        const warmup = new Engine();
+        try { await warmup.boot({ flavor: 'lite-single' }); } catch (e) {
+          console.warn('[engine] private warmup failed (continuing):', e.message || e);
+        }
+        await new Promise(r => setTimeout(r, 1500));
+        try { warmup.terminate(); } catch {}
+        await new Promise(r => setTimeout(r, 1500));
+      }
+      // ONLY now do we replace the global engine. The user-facing
+      // `engine` variable is never assigned to a transient warmup
+      // instance; it goes from "old crashed engine" straight to
+      // "new fully-booted engine."
       engine = new Engine();
       explainer.engine = engine;
       explainer.wire();
-      wireEngineCaptureListeners(engine);
-      // DIRECT warmup — see note at the other site. Bypass bootEngine
-      // so a warmup crash (iOS Safari WASM flake) doesn't re-enter
-      // the fallback chain and cascade into hundreds of retries.
-      try { await engine.boot({ flavor: 'lite-single' }); } catch (e) {
-        console.warn('[engine] ritual warmup failed (continuing):', e.message || e);
-      }
-      // Let the ST worker produce a few info lines before we kill
-      // it — user's manual ritual has seconds of actual engine work
-      // in between, which may be why it settles correctly.
-      await new Promise(r => setTimeout(r, 1500));
-      try { engine.terminate?.(); } catch {}
-      await new Promise(r => setTimeout(r, 1500));
+      if (typeof wireEngineCaptureListeners === 'function') wireEngineCaptureListeners(engine);
+      await bootEngine(targetFlavor);
+    } finally {
+      window.__engineRecovering = false;
     }
-    engine = new Engine();
-    explainer.engine = engine;
-    explainer.wire();
-    if (typeof wireEngineCaptureListeners === 'function') wireEngineCaptureListeners(engine);
-    await bootEngine(targetFlavor);
   }
 
   // ────────── Engine control <-> UI ──────────
@@ -1383,6 +1401,66 @@ async function main() {
     eng.addEventListener('bestmove', () => {
       captureEngineThinkingEval();
       scheduleTimelineRender();
+    });
+    // ── Crash routing (consultation Phase 1) ──────────────────────
+    // engine.js fires `engine-crashed` on a runtime worker.onerror
+    // (memory OOB, null function, etc.). Route to switchEngineFlavor
+    // with a one-way fallback rule: full → lite (smaller NNUE, less
+    // memory pressure), lite → lite-single. Never re-recover into
+    // the same flavor that just crashed.
+    eng.addEventListener('engine-crashed', (ev) => {
+      const crashedFlavor = ev.detail?.flavor;
+      const fallback = (crashedFlavor === 'full')
+        ? 'lite'
+        : (crashedFlavor === 'lite' || crashedFlavor === 'avrukh' || crashedFlavor === 'kaufman' || crashedFlavor === 'classical' || crashedFlavor === 'alphazero' || crashedFlavor === 'avrukhplus')
+          ? 'lite-single'
+          : 'lite-single';
+      console.warn('[engine] crashed → one-way fallback', { from: crashedFlavor, to: fallback });
+      if (ui.narrationText) {
+        ui.narrationText.innerHTML = `⚠ Engine crashed — falling back to <strong>${fallback}</strong>…`;
+      }
+      // Don't loop forever if the fallback also crashes.
+      if (window.__engineCrashFallbackTried) {
+        console.error('[engine] fallback already tried in this session — giving up');
+        return;
+      }
+      window.__engineCrashFallbackTried = true;
+      // Update the flavor pref + selector so the user sees what
+      // happened. localStorage carries this forward across refresh
+      // — they'll boot lite next time.
+      try {
+        currentFlavor = fallback;
+        if (ui.selectFlavor) ui.selectFlavor.value = fallback;
+        localStorage.setItem(FLAVOR_STORAGE, fallback);
+      } catch {}
+      switchEngineFlavor(fallback)
+        .then(() => {
+          console.log('[engine] crash recovery done — replaying pending turn if any');
+          if (ui.narrationText) ui.narrationText.innerHTML = `✓ Engine recovered (${fallback}).`;
+          // Replay any queued engine turn that was lost in the crash.
+          if (window.__pendingEngineTurnFen) {
+            console.log('[engine] replaying pending engine turn after recovery');
+            try { fireAnalysis(); } catch {}
+          }
+        })
+        .catch(err => {
+          console.error('[engine] crash recovery FAILED', err);
+          if (ui.narrationText) ui.narrationText.innerHTML =
+            `❌ Engine crashed and recovery failed. Refresh the page or pick a different engine flavor from the toolbar.`;
+        });
+    });
+    // ── Pending-turn replay on `ready` (Phase 1.3) ────────────────
+    // If a practice engine turn was requested while the engine was
+    // booting/recovering, fireAnalysis stashes the FEN on
+    // window.__pendingEngineTurnFen and bails. When the freshly-
+    // booted engine fires its `ready` event, replay by re-firing
+    // fireAnalysis — it'll see "engine's turn" and dispatch.
+    eng.addEventListener('ready', () => {
+      if (window.__pendingEngineTurnFen) {
+        console.log('[engine] ready → replaying pending engine turn',
+          { fen: window.__pendingEngineTurnFen.slice(0, 30) + '…' });
+        try { fireAnalysis(); } catch {}
+      }
     });
   }
   window.__wireEngineCaptureListeners = wireEngineCaptureListeners;
@@ -3915,6 +3993,24 @@ async function main() {
                   ui.narrationText.innerHTML = 'Engine has no legal moves — game over.';
                 }
               };
+              // ── Durable-turn queue (consultation Phase 1.3) ───
+              // If engine isn't ready (booting / recovering / fresh
+              // crash), DON'T fire engine.start — it'd be lost. Stash
+              // the FEN, and the `engine.ready` listener (in
+              // wireEngineCaptureListeners) will replay fireAnalysis
+              // once boot/recovery completes. Combined with private
+              // warmup (1.2) + worker.onerror=fatal (1.1), this makes
+              // "engine never moves after a crash" structurally
+              // impossible.
+              if (!engine || !engine.ready || window.__engineRecovering) {
+                console.warn('[practice] engine not ready — queueing engine turn for replay', {
+                  ready: engine?.ready, recovering: !!window.__engineRecovering,
+                });
+                window.__pendingEngineTurnFen = fen;
+                ui.narrationText.innerHTML = '⏳ Engine is starting up — your move queued, will play in a moment…';
+                return;
+              }
+              window.__pendingEngineTurnFen = null;     // dispatching now
               engine.addEventListener('bestmove', onBest);
               engine.start(fen, thinkLimits);
             } else {
@@ -3925,7 +4021,10 @@ async function main() {
                 `♟ <strong>Your turn</strong> (${practiceColor}). Make a move.`;
             }
           } else {
-            engine.start(fen, searchLimits());
+            // Free-analysis path — only dispatch if engine is healthy.
+            if (engine && engine.ready && !window.__engineRecovering) {
+              engine.start(fen, searchLimits());
+            }
           }
         }
       }

@@ -224,10 +224,23 @@ export class Engine extends EventTarget {
     this._lastGameId = null;
 
     this.worker.onmessage = (e) => this._handleLine(e.data);
-    this.worker.onerror   = (e) => {
-      console.error('Stockfish worker error:', e);
-      this.dispatchEvent(new CustomEvent('error', { detail: e }));
-    };
+    // RUNTIME worker.onerror handler — fatal for the worker.
+    //
+    // We've seen `RuntimeError: memory access out of bounds` traps
+    // INSIDE stockfish.wasm,worker (Phase 1 consultation, GPT review).
+    // The worker thread crashes silently — main thread never sees a
+    // bestmove again, and our stall detector only catches it 6 s
+    // later. By then, board events may have already routed work to
+    // a dead worker.
+    //
+    // Treat the FIRST runtime onerror as fatal: terminate, mark not
+    // ready, fire any awaited synthetic-stuck so the UI unfreezes,
+    // then dispatch an `engine-crashed` event so main.js can route
+    // to recovery (one-way fallback to a safer flavor).
+    //
+    // The bootCrashHandler below replaces this during boot to reject
+    // the boot promise instead of going through the runtime path.
+    this.worker.onerror = (e) => this._handleWorkerCrash(e);
 
     // Capture the 'id name' line during UCI handshake for later display
     const idCapture = (ev) => {
@@ -577,6 +590,36 @@ export class Engine extends EventTarget {
       detail: { best: null, ponder: null, topMoves: [], history: this.history, stuck: true }
     }));
     return true;
+  }
+
+  // Runtime worker.onerror handler. Treats any post-boot worker
+  // crash (memory OOB, null function, Aborted(), etc.) as fatal for
+  // this Engine instance:
+  //   * mark not ready
+  //   * fire synthetic stuck-bestmove if one was awaited (UI unfreeze)
+  //   * terminate the worker
+  //   * emit `engine-crashed` so main.js routes to recovery
+  // Idempotent — once we've crashed and emitted, further worker
+  // errors are ignored (stops the log flood we saw — 102 instances
+  // of the same memory-OOB in the same millisecond).
+  _handleWorkerCrash(errEvent) {
+    if (this._crashed) return;     // already handled
+    this._crashed = true;
+    const msg = (errEvent && (errEvent.message || errEvent.error?.message))
+      || 'Stockfish worker crashed (no message)';
+    console.error('[engine] runtime worker crash — terminating', { msg, flavor: this.lastFlavor });
+    // Mark not ready BEFORE dispatching events so listeners checking
+    // engine.ready see false.
+    this.ready = false;
+    // Cancel timers + fire synthetic stuck so the UI unfreezes.
+    this._fireStuckSynthetic('worker crashed: ' + msg);
+    // Tear down the worker. terminate() also clears its own timers
+    // and resets _bestmoveAwaited / _pendingRequest.
+    try { this.terminate(); } catch {}
+    // Tell main.js: route to one-way fallback (full → lite, etc.).
+    this.dispatchEvent(new CustomEvent('engine-crashed', {
+      detail: { flavor: this.lastFlavor, message: msg },
+    }));
   }
 
   // Internal: drain a queued request after the current search ends.
