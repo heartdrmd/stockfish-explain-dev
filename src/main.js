@@ -1416,12 +1416,34 @@ async function main() {
     // manually rather than have us silently degrade their choice.
     eng.addEventListener('engine-crashed', (ev) => {
       const crashedFlavor = ev.detail?.flavor;
+      const crashMsg      = ev.detail?.message || '';
       window.__engineCrashCount = (window.__engineCrashCount || 0) + 1;
       const attempt = window.__engineCrashCount;
       const MAX_RETRIES = 3;
+      // ── Persistent crash history (for Phase-3-decision visibility) ─
+      // Keep last 50 crashes in localStorage with timestamp + flavor +
+      // first 100 chars of the underlying error. Surfaced via:
+      //   * window.__engineCrashStats()  — one-line summary in console
+      //   * the engine-mode pill         — appends "· N crashes" badge
+      // Lets you decide if the wedges are frequent enough to justify
+      // Phase 3 (lichess-stockfish-web migration). If you see ≥5
+      // crashes/week with full, ship Phase 3.
+      const HISTORY_KEY = 'stockfish-explain.engine-crash-history';
+      const HISTORY_CAP = 50;
+      try {
+        const prev = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+        prev.push({
+          when:    new Date().toISOString(),
+          flavor:  crashedFlavor,
+          message: String(crashMsg).slice(0, 100),
+        });
+        if (prev.length > HISTORY_CAP) prev.splice(0, prev.length - HISTORY_CAP);
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(prev));
+      } catch {}
       console.warn('[engine] crashed — retrying SAME flavor', {
         flavor: crashedFlavor, attempt, maxRetries: MAX_RETRIES,
       });
+      try { window.__refreshCrashBadge?.(); } catch {}
       if (attempt > MAX_RETRIES) {
         console.error('[engine] crash retry budget exhausted');
         if (ui.narrationText) {
@@ -1467,6 +1489,64 @@ async function main() {
   }
   window.__wireEngineCaptureListeners = wireEngineCaptureListeners;
   wireEngineCaptureListeners(engine);
+
+  // ── Engine-crash diagnostic helpers (Phase-3-decision visibility) ─
+  // Console: window.__engineCrashStats() prints the persistent crash
+  // history in a digestible form. Use this to decide if Phase 3
+  // (lichess-stockfish-web migration) is worth the work — if you're
+  // seeing ≥5 crashes/week with full, the answer is yes.
+  window.__engineCrashStats = () => {
+    let history = [];
+    try { history = JSON.parse(localStorage.getItem('stockfish-explain.engine-crash-history') || '[]'); }
+    catch {}
+    if (!history.length) {
+      console.log('%c[engine-crash-stats] No crashes recorded. ✓', 'color: #4ec9b0; font-weight: bold;');
+      return [];
+    }
+    const byFlavor = {};
+    const byDay = {};
+    for (const c of history) {
+      byFlavor[c.flavor] = (byFlavor[c.flavor] || 0) + 1;
+      const day = (c.when || '').slice(0, 10);
+      byDay[day] = (byDay[day] || 0) + 1;
+    }
+    const last7Days = (() => {
+      const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
+      return history.filter(c => new Date(c.when).getTime() >= cutoff).length;
+    })();
+    console.group('%c[engine-crash-stats]', 'color:#e39a5c;font-weight:bold;');
+    console.log('Total crashes recorded:', history.length, '(cap 50)');
+    console.log('Crashes in last 7 days:', last7Days);
+    console.log('By flavor:', byFlavor);
+    console.log('By day:', byDay);
+    console.log('Most recent:', history.slice(-3).reverse());
+    console.log('Recommendation:', last7Days >= 5
+      ? '⚠ Frequent crashes — Phase 3 (lichess-stockfish-web migration) likely worth shipping.'
+      : '✓ Crash rate manageable — Phase 1 architecture handling it.');
+    console.groupEnd();
+    return history;
+  };
+  // Refresh the engine-mode pill every time a crash happens to show
+  // the per-session counter, so you don't have to open the console.
+  function refreshCrashBadge() {
+    if (!ui.engineMode) return;
+    const sessionCount = window.__engineCrashCount || 0;
+    let history = 0;
+    try { history = (JSON.parse(localStorage.getItem('stockfish-explain.engine-crash-history') || '[]')).length; }
+    catch {}
+    const cur = ui.engineMode.textContent || '';
+    const stripped = cur.replace(/\s*·\s*\d+\s*crash(es)?$/, '');
+    if (sessionCount > 0) {
+      ui.engineMode.textContent = `${stripped} · ${sessionCount} crash${sessionCount === 1 ? '' : 'es'}`;
+      ui.engineMode.title = `${sessionCount} crashes this session, ${history} all-time. Run window.__engineCrashStats() in console for details.`;
+      ui.engineMode.style.color = sessionCount >= 3 ? '#f48771' : '#e39a5c';
+    } else {
+      ui.engineMode.textContent = stripped;
+      ui.engineMode.title = '';
+      ui.engineMode.style.color = '';
+    }
+  }
+  window.__refreshCrashBadge = refreshCrashBadge;
 
   // ────────── Chess clock (#19) ─────────────────────────────────────
   const clock = {
