@@ -226,9 +226,13 @@ const migrations = [
     name: '011_favourites_and_custom_openings_dual_owner',
     sql: `
       -- Favourites: relax user_id, add guest_id, switch primary key.
+      -- ORDER MATTERS: drop PK FIRST. Postgres requires all primary-
+      -- key columns to be NOT NULL, so attempting DROP NOT NULL on
+      -- user_id while it's still part of favourites_pkey fails with
+      -- "column user_id is in a primary key".
+      ALTER TABLE favourites DROP CONSTRAINT IF EXISTS favourites_pkey;
       ALTER TABLE favourites ALTER COLUMN user_id DROP NOT NULL;
       ALTER TABLE favourites ADD COLUMN IF NOT EXISTS guest_id TEXT;
-      ALTER TABLE favourites DROP CONSTRAINT IF EXISTS favourites_pkey;
       ALTER TABLE favourites DROP CONSTRAINT IF EXISTS favourites_owner_xor;
       ALTER TABLE favourites ADD CONSTRAINT favourites_owner_xor
         CHECK ((user_id IS NOT NULL) <> (guest_id IS NOT NULL));
