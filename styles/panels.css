@@ -1451,22 +1451,27 @@ select.coach-model-input:focus { outline: none; border-color: var(--c-primary); 
 /* Engine power button — primary on/off control, impossible to miss */
 /* ──────────────────────────────────────────────────────────────── */
 .engine-power {
+  /* Was column-flex with 14-18px padding + 18-20px fonts → button
+     was ~100px tall, which broke the sticky layout's 56px height
+     assumption and made it bleed over the eval / PV lines below.
+     Now a single horizontal row with compact padding — same colour,
+     same pulse, half the height. */
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 8px;
   width: 100%;
-  padding: 14px 18px;
+  padding: 8px 14px;
   margin: 0 0 10px 0;
   border: 2px solid rgba(0, 0, 0, 0.15);
-  border-radius: 10px;
+  border-radius: 8px;
   background: linear-gradient(180deg, #34a853 0%, #1e7b2e 100%);
   color: white;
   font-family: var(--font-sans);
-  font-size: 18px;
-  font-weight: 800;
-  letter-spacing: 0.5px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
   cursor: pointer;
   transition: background 0.12s ease, transform 0.06s ease,
               box-shadow 0.12s ease;
@@ -1486,14 +1491,14 @@ select.coach-model-input:focus { outline: none; border-color: var(--c-primary); 
   background: linear-gradient(180deg, #e53935 0%, #a02724 100%);
 }
 .engine-power-dot {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 0 8px rgba(255, 255, 255, 0.9),
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.9),
               0 0 0 2px rgba(255, 255, 255, 0.25);
   animation: enginePulse 1.6s ease-in-out infinite;
-  margin-bottom: 2px;
+  flex: 0 0 auto;
 }
 .engine-power.off .engine-power-dot {
   animation: none;
@@ -1504,15 +1509,18 @@ select.coach-model-input:focus { outline: none; border-color: var(--c-primary); 
   50%      { transform: scale(1.25); opacity: 0.6; }
 }
 .engine-power-label {
-  font-size: 20px;
+  font-size: 14px;
   line-height: 1;
+  white-space: nowrap;
 }
 .engine-power-sub {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 500;
   opacity: 0.85;
   letter-spacing: 0.3px;
   text-transform: uppercase;
+  white-space: nowrap;
+  margin-left: 4px;
 }
 
 /* Row that holds the big ENGINE power + THREAT side by side. Power
@@ -1528,26 +1536,32 @@ select.coach-model-input:focus { outline: none; border-color: var(--c-primary); 
   margin-bottom: 0;
 }
 .threat-btn {
-  flex: 1 1 0;
-  min-width: 120px;
+  flex: 0 1 auto;
+  min-width: 80px;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  padding: 14px 10px;
+  gap: 6px;
+  padding: 8px 12px;
   border: 2px solid rgba(0, 0, 0, 0.15);
-  border-radius: 10px;
+  border-radius: 8px;
   background: linear-gradient(180deg, #ff9800 0%, #cc6f00 100%);
   color: white;
   font-family: var(--font-sans);
-  font-weight: 800;
-  letter-spacing: 0.5px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
   cursor: pointer;
   transition: transform 0.06s ease, box-shadow 0.12s ease;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15),
               inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
+/* Hide the verbose sub-text inside threat button — keep just the
+   icon + "THREAT" label so the button stays narrow. The "(x)"
+   keyboard hint moves into the title attribute instead. */
+.threat-btn .threat-sub { display: none; }
+.threat-btn .threat-label { white-space: nowrap; font-size: 13px; }
 .threat-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2),
