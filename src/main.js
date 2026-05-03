@@ -3173,6 +3173,19 @@ async function main() {
   // never evaluated before, so every other ply had cpWhite: null.
   let sweepRunning = false;
   let sweepAbort = false;
+  // Auto-abort the background sweep the moment the user does anything
+  // that needs the engine — making a move, navigating history, etc.
+  // Frees the engine for free-analysis; sweep can resume on the next
+  // explicit Learn click (verify-on-demand path).
+  function _abortSweepIfRunning() {
+    if (sweepRunning) {
+      console.log('[sweep] user interaction — aborting background sweep');
+      sweepAbort = true;
+      try { engine.stop(); } catch {}
+    }
+  }
+  board.addEventListener('move', _abortSweepIfRunning);
+  board.addEventListener('nav',  _abortSweepIfRunning);
   // Expose a stop hook so the 'Stop analysis' button in the reanalyze
   // UI can bail out mid-sweep if the user decides it's taking too long.
   window.__stopRetrospectiveSweep = () => { sweepAbort = true; try { engine.stop(); } catch {} };
@@ -6157,20 +6170,34 @@ async function main() {
     try { stopClock(); } catch {}
     // Draft is no longer needed.
     clearDraft();
-    // Run a retrospective sweep — fills in per-move evals for all
-    // plies the engine didn't evaluate live (critical for practice
-    // where the user's turns were never searched). THEN archive, so
-    // mistake-bank classification has the full data.
+    // Run a retrospective sweep in the BACKGROUND — fills in per-move
+    // evals for plies the engine didn't evaluate live, so the eval
+    // timeline + accuracy strip have data. NOT awaited at the user-
+    // visible level: the user gets free-analysis access immediately,
+    // and the sweep auto-aborts the moment they move / navigate
+    // (sweepAbort wired into board 'move' / 'nav' below). When they're
+    // idle again, fireAnalysis kicks live analysis on the current
+    // position.
+    //
+    // Verify pass (full-strength MultiPV=20) is NO LONGER auto-run.
+    // It used to lock the engine for 5 s × number of mistakes — user
+    // resigned + immediately wanted to analyze, but the engine was
+    // busy. Verify now runs ON-DEMAND when the user clicks 🎓 Learn
+    // (existing Learn button handler awaits it before walking the
+    // mistakes — same outcome, just deferred until the user actually
+    // wants it).
     (async () => {
       ui.narrationText.innerHTML =
-        `🏁 Game over — <strong>${resultTag}</strong> — ${narrative}. ⏳ Analysing each move for the mistake bank…`;
+        `🏁 Game over — <strong>${resultTag}</strong> — ${narrative}. Free analysis ready — engine is yours. (Mistake-bank scan running in the background.)`;
       try {
         await retrospectiveSweep({
           minDepth: 12,
           onProgress: (d, t) => {
-            if (ui.narrationText) {
+            // Only update narration if user hasn't replaced it (e.g.
+            // by interacting). Don't fight for the spotlight.
+            if (ui.narrationText && ui.narrationText.innerHTML.includes('Mistake-bank scan running')) {
               ui.narrationText.innerHTML =
-                `🏁 <strong>Game over: ${resultTag}</strong> — analysing move ${d}/${t} for mistake bank…`;
+                `🏁 Game over — <strong>${resultTag}</strong> — ${narrative}. Free analysis ready. (Mistake-bank scan ${d}/${t} in the background.)`;
             }
           },
         });
@@ -6180,36 +6207,7 @@ async function main() {
       } catch (err) {
         console.warn('[archive] failed to archive practice game', err);
       }
-      // Verification pass: re-probe each flagged mistake FEN at
-      // FULL Stockfish strength + 5 s. Catches misclassifications
-      // from the shallow sweep (skill 8-14 play often judged badly
-      // at depth 12). User-visible: Learn button stays disabled and
-      // gray until verification finishes, then re-enables in blue.
-      try {
-        if (ui.narrationText) {
-          ui.narrationText.innerHTML =
-            `🏁 <strong>Game over: ${resultTag}</strong> — ${narrative}. 🔍 Verifying mistakes at full strength…`;
-        }
-        updateLearnButton();  // reflect verifying state
-        const finalCount = await verifyMistakesAtMaxStrength((d, t) => {
-          if (ui.narrationText) {
-            ui.narrationText.innerHTML =
-              `🏁 <strong>Game over: ${resultTag}</strong> — 🔍 Verifying mistake ${d}/${t} at full strength…`;
-          }
-        });
-        // Mark this game-history as verified so the Learn button
-        // doesn't re-run verification if the user clicks it.
-        try { window.__mistakesVerifiedForFen = board.startingFen + '|' + (board.chess.history().join(',') || ''); } catch {}
-        if (ui.narrationText) {
-          ui.narrationText.innerHTML =
-            `🏁 <strong>Game over: ${resultTag}</strong> — ${narrative}. Archived to 📚 My Games. ` +
-            `${finalCount} confirmed mistake${finalCount === 1 ? '' : 's'} — click 🎓 Learn to review.`;
-        }
-        updateLearnButton();
-      } catch (err) {
-        console.warn('[verify] mistakes verification failed', err);
-        updateLearnButton();
-      }
+      updateLearnButton();
       // Explicitly restore the engine to the user's TOOLBAR preferences
       // (Skill Level + MultiPV) before kicking live analysis. The post-
       // game chain (retrospectiveSweep + verifyMistakesAtMaxStrength +
