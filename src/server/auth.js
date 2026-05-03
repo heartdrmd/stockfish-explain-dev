@@ -160,7 +160,21 @@ export function wireAuth(app) {
     try {
       const token = req.cookies?.[SESSION_COOKIE];
       if (token) await query('DELETE FROM sessions WHERE token = $1', [token]);
-      res.clearCookie(SESSION_COOKIE, { path: '/' });
+      // CRITICAL: clearCookie's options must MATCH the options the
+      // cookie was originally set with (see setSessionCookie above).
+      // Modern Chrome 80+ requires matching SameSite for the
+      // deletion Set-Cookie to actually take effect — without this,
+      // the browser ignores the clear, the cookie persists, and the
+      // user reports "logout button doesn't actually log out."
+      // Symptom seen in prod: sessions table accumulating rows per
+      // login because the prior session's cookie was never cleared
+      // server-side, even though the row was deleted from the DB.
+      res.clearCookie(SESSION_COOKIE, {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure:   !!req.secure || req.get('x-forwarded-proto') === 'https',
+        path: '/',
+      });
       res.json({ ok: true });
     } catch (err) {
       console.error('[auth] logout failed', err);
