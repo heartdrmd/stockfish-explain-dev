@@ -107,6 +107,10 @@ export const api = {
   putFavourite:      (opening_key, side) => req('PUT', '/api/favourites', { opening_key, side }),
   deleteFavourite:   (opening_key)     => req('DELETE', '/api/favourites?key=' + encodeURIComponent(opening_key)),
 
+  // Engine crash telemetry (Phase-3-decision visibility)
+  reportEngineCrashes: (crashes)        => req('POST',   '/api/engine-crashes', { crashes }),
+  engineCrashStats:    ()               => req('GET',    '/api/engine-crashes/stats'),
+
   listCustomOpenings: ()                => req('GET',    '/api/custom-openings'),
   saveCustomOpening:  (op)              => req('POST',   '/api/custom-openings', op),
   deleteCustomOpening: ({ id, group_name, opening_name }) => {

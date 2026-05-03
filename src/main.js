@@ -1491,41 +1491,74 @@ async function main() {
   wireEngineCaptureListeners(engine);
 
   // ── Engine-crash diagnostic helpers (Phase-3-decision visibility) ─
-  // Console: window.__engineCrashStats() prints the persistent crash
-  // history in a digestible form. Use this to decide if Phase 3
-  // (lichess-stockfish-web migration) is worth the work — if you're
-  // seeing ≥5 crashes/week with full, the answer is yes.
-  window.__engineCrashStats = () => {
-    let history = [];
-    try { history = JSON.parse(localStorage.getItem('stockfish-explain.engine-crash-history') || '[]'); }
+  // Now backed by SERVER-SIDE storage. Each crash is appended to a
+  // local-storage queue and flushed to the engine_crashes Postgres
+  // table every 5 minutes (and on page load). That gives me visibility
+  // across all the user's devices + sessions without asking them to
+  // download a log every time. Local copy persists across refresh as
+  // a fallback / cache.
+  //
+  // window.__engineCrashStats() now prefers server stats when
+  // available, falling back to local-only if /api/engine-crashes/stats
+  // can't be reached.
+  window.__engineCrashStats = async () => {
+    let server = null;
+    try { server = await api.engineCrashStats(); } catch (err) {
+      console.warn('[crash-stats] server query failed, falling back to local', err.message || err);
+    }
+    let local = [];
+    try { local = JSON.parse(localStorage.getItem('stockfish-explain.engine-crash-history') || '[]'); }
     catch {}
-    if (!history.length) {
-      console.log('%c[engine-crash-stats] No crashes recorded. ✓', 'color: #4ec9b0; font-weight: bold;');
-      return [];
-    }
-    const byFlavor = {};
-    const byDay = {};
-    for (const c of history) {
-      byFlavor[c.flavor] = (byFlavor[c.flavor] || 0) + 1;
-      const day = (c.when || '').slice(0, 10);
-      byDay[day] = (byDay[day] || 0) + 1;
-    }
-    const last7Days = (() => {
-      const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
-      return history.filter(c => new Date(c.when).getTime() >= cutoff).length;
-    })();
+
     console.group('%c[engine-crash-stats]', 'color:#e39a5c;font-weight:bold;');
-    console.log('Total crashes recorded:', history.length, '(cap 50)');
-    console.log('Crashes in last 7 days:', last7Days);
-    console.log('By flavor:', byFlavor);
-    console.log('By day:', byDay);
-    console.log('Most recent:', history.slice(-3).reverse());
-    console.log('Recommendation:', last7Days >= 5
-      ? '⚠ Frequent crashes — Phase 3 (lichess-stockfish-web migration) likely worth shipping.'
-      : '✓ Crash rate manageable — Phase 1 architecture handling it.');
+    if (server) {
+      console.log('%c== SERVER (Postgres) ==', 'color:#9cdcfe;');
+      console.log('Total crashes recorded:', server.total);
+      console.log('Last 7 days:', server.last7Days);
+      console.log('By flavor:', server.byFlavor);
+      console.log('By day (last 30):', server.byDay);
+      console.log('10 most recent:', server.recent);
+      console.log('%cRecommendation:%c %s', 'font-weight:bold;', '',
+        server.last7Days >= 5
+          ? '⚠ Frequent crashes — Phase 3 (lichess-stockfish-web migration) likely worth shipping.'
+          : '✓ Crash rate manageable — Phase 1 architecture handling it.');
+    } else {
+      console.log('%c== SERVER UNREACHABLE — local cache only ==', 'color:#f48771;');
+      const byFlavor = {};
+      for (const c of local) byFlavor[c.flavor] = (byFlavor[c.flavor] || 0) + 1;
+      console.log('Local history (last 50 cap):', local.length);
+      console.log('By flavor (local):', byFlavor);
+      console.log('Most recent (local):', local.slice(-5).reverse());
+    }
     console.groupEnd();
-    return history;
+    return { server, local };
   };
+
+  // ── Periodic flush of crash history to server ──────────────────
+  // Every 5 minutes (and once on boot), POST any local-only crash
+  // entries up to /api/engine-crashes. Server de-dupes on (owner,
+  // crashed_at, flavor) so re-flushing is harmless. After a successful
+  // flush, mark each entry's `flushed: true` in localStorage so the
+  // next pass skips already-uploaded items.
+  async function flushEngineCrashHistory() {
+    const KEY = 'stockfish-explain.engine-crash-history';
+    let arr = [];
+    try { arr = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch {}
+    const unflushed = arr.filter(c => !c.flushed);
+    if (!unflushed.length) return;
+    try {
+      const result = await api.reportEngineCrashes(unflushed);
+      console.log('[crash-telemetry] flushed', { sent: unflushed.length, inserted: result?.inserted });
+      // Mark all as flushed.
+      const updated = arr.map(c => ({ ...c, flushed: true }));
+      try { localStorage.setItem(KEY, JSON.stringify(updated)); } catch {}
+    } catch (err) {
+      console.warn('[crash-telemetry] flush failed (will retry next pass)', err.message || err);
+    }
+  }
+  // Boot flush + 5-minute interval.
+  setTimeout(() => flushEngineCrashHistory(), 8000);   // small delay so auth has settled
+  setInterval(flushEngineCrashHistory, 5 * 60 * 1000);
   // Refresh the engine-mode pill every time a crash happens to show
   // the per-session counter, so you don't have to open the console.
   function refreshCrashBadge() {

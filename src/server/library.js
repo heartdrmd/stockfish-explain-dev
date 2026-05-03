@@ -155,6 +155,98 @@ export function wireLibrary(app) {
     }
   });
 
+  // ── Engine crash telemetry (Phase-3-decision visibility) ──────
+  //
+  // POST /api/engine-crashes
+  //   body: { crashes: [{ when, flavor, message, attempt }, ...] }
+  // Idempotent batch insert. Client batches every 5 minutes from
+  // localStorage; entries already inserted (matched by user/guest
+  // owner + timestamp + flavor) are silently no-op'd.
+  app.post('/api/engine-crashes', requireAuthOrGuest, async (req, res) => {
+    try {
+      const arr = Array.isArray(req.body?.crashes) ? req.body.crashes : [];
+      if (!arr.length) return res.json({ inserted: 0 });
+      const userId  = req.user  ? req.user.id  : null;
+      const guestId = req.guest ? req.guest.id : null;
+      const ua = String(req.get('User-Agent') || '').slice(0, 300);
+      let inserted = 0;
+      for (const c of arr) {
+        if (!c || typeof c.when !== 'string') continue;
+        // De-dupe on (owner, crashed_at, flavor) — same crash from
+        // multiple flush passes shouldn't double-count.
+        const dupCheck = await query(
+          `SELECT 1 FROM engine_crashes
+            WHERE ($1::int IS NOT NULL AND user_id = $1)
+               OR ($2::text IS NOT NULL AND guest_id = $2)
+            AND crashed_at = $3 AND flavor = $4
+            LIMIT 1`,
+          [userId, guestId, c.when, c.flavor || null],
+        );
+        if (dupCheck.rowCount > 0) continue;
+        await query(
+          `INSERT INTO engine_crashes(
+              user_id, guest_id, flavor, message, user_agent, attempt, crashed_at
+            ) VALUES($1,$2,$3,$4,$5,$6,$7)`,
+          [
+            userId, guestId,
+            String(c.flavor || '').slice(0, 50),
+            String(c.message || '').slice(0, 500),
+            ua,
+            Number.isFinite(+c.attempt) ? +c.attempt : 1,
+            c.when,
+          ],
+        );
+        inserted++;
+      }
+      res.json({ inserted, received: arr.length });
+    } catch (err) {
+      console.error('[engine-crashes] insert failed', err);
+      res.status(500).json({ error: 'insert failed' });
+    }
+  });
+
+  // GET /api/engine-crashes/stats — owner-scoped summary for the
+  // crash-stats console helper. Returns counts by flavor + by day +
+  // last-7-days total.
+  app.get('/api/engine-crashes/stats', requireAuthOrGuest, async (req, res) => {
+    try {
+      const { col, val } = ownerOf(req);
+      const total  = await query(`SELECT COUNT(*)::int AS c FROM engine_crashes WHERE ${col} = $1`, [val]);
+      const last7  = await query(
+        `SELECT COUNT(*)::int AS c FROM engine_crashes
+           WHERE ${col} = $1 AND crashed_at > NOW() - INTERVAL '7 days'`,
+        [val],
+      );
+      const byFlavor = await query(
+        `SELECT flavor, COUNT(*)::int AS c FROM engine_crashes
+           WHERE ${col} = $1 GROUP BY flavor ORDER BY c DESC`,
+        [val],
+      );
+      const byDay = await query(
+        `SELECT DATE(crashed_at)::text AS day, COUNT(*)::int AS c
+           FROM engine_crashes
+          WHERE ${col} = $1 AND crashed_at > NOW() - INTERVAL '30 days'
+          GROUP BY day ORDER BY day DESC`,
+        [val],
+      );
+      const recent = await query(
+        `SELECT crashed_at, flavor, message FROM engine_crashes
+           WHERE ${col} = $1 ORDER BY crashed_at DESC LIMIT 10`,
+        [val],
+      );
+      res.json({
+        total: total.rows[0]?.c || 0,
+        last7Days: last7.rows[0]?.c || 0,
+        byFlavor: byFlavor.rows,
+        byDay: byDay.rows,
+        recent: recent.rows,
+      });
+    } catch (err) {
+      console.error('[engine-crashes] stats failed', err);
+      res.status(500).json({ error: 'stats failed' });
+    }
+  });
+
   // DELETE /api/custom-openings  — remove by (group, name) OR by id.
   // Query: ?group=<g>&name=<n>   — preferred for client compat
   //    or  ?id=<id>              — direct

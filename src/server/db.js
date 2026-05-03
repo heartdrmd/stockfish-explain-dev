@@ -265,6 +265,33 @@ const migrations = [
         ON custom_openings(guest_id) WHERE guest_id IS NOT NULL;
     `,
   },
+  {
+    // Server-side telemetry for engine WASM crashes. Each time the
+    // worker.onerror fires (memory access OOB, null function, Aborted,
+    // etc.) we POST one row here. Lets us count crashes across all of
+    // the user's devices + sessions without asking them to send a log
+    // every time. Used to decide if Phase 3 (lichess-stockfish-web
+    // migration) is worth shipping.
+    //
+    // Same dual-ownership pattern as games: user_id OR guest_id.
+    name: '012_engine_crashes',
+    sql: `
+      CREATE TABLE IF NOT EXISTS engine_crashes (
+        id           SERIAL PRIMARY KEY,
+        user_id      INT REFERENCES users(id) ON DELETE CASCADE,
+        guest_id     TEXT,
+        flavor       TEXT,
+        message      TEXT,
+        user_agent   TEXT,
+        attempt      INT DEFAULT 1,            -- 1st, 2nd, 3rd retry of this session
+        crashed_at   TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_engine_crashes_user_when
+        ON engine_crashes(user_id, crashed_at DESC) WHERE user_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_engine_crashes_guest_when
+        ON engine_crashes(guest_id, crashed_at DESC) WHERE guest_id IS NOT NULL;
+    `,
+  },
 ];
 
 export async function runMigrations() {
