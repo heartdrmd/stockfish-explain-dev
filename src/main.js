@@ -5924,6 +5924,32 @@ async function main() {
         favsCount: Object.keys(loadFavs()).length,
         queueCount: loadQueueSet().size,
       });
+      // ── Use-current-position parity with "Save as practice opening"
+      // If the user checked "use current" AND there are moves on the
+      // board, give them the same save dialog as the toolbar's save
+      // button — so the position becomes a reusable custom opening
+      // instead of a one-shot. They confirm + name + folder + side,
+      // hit Save opening, and the practice game continues from there.
+      // The save modal returns synchronously after submit; nothing to
+      // await here (the position is already on the board, so the
+      // existing useCurrent path below picks it up untouched).
+      if (useCurrent && typeof window.__openSaveAsPracticeOpening === 'function') {
+        try {
+          const moves = board.chess.history();
+          if (moves.length && !window.__skipUseCurrentSavePrompt) {
+            const saveIt = confirm(
+              `Save this position as a new practice opening so it appears under a folder next time?\n\n` +
+              `OK → opens the Save dialog (name + folder + side).\n` +
+              `Cancel → just start the practice from the current board (one-shot).`
+            );
+            if (saveIt) {
+              pModal.hidden = true;
+              window.__openSaveAsPracticeOpening();
+              return;   // user finishes via the save dialog; they can re-open practice when ready
+            }
+          }
+        } catch (err) { console.warn('[practice-start] use-current save prompt failed', err); }
+      }
       const op = pickedPracticeOpening();
       console.log('[practice-start] resolved op', { name: op?.name, movesLen: op?.moves?.length || 0, hasFen: !!op?.fen });
       const color = pColor.value;       // 'white' | 'black'
@@ -7248,6 +7274,10 @@ async function main() {
       setTimeout(() => sName.focus(), 50);
     };
     btnSave.addEventListener('click', openSaveModal);
+    // Expose so the practice-modal "use current position" path can
+    // trigger the SAME save dialog instead of users having two
+    // disconnected ways to capture a position.
+    window.__openSaveAsPracticeOpening = openSaveModal;
     sClose.addEventListener('click', () => sModal.hidden = true);
     sModal.addEventListener('click', (e) => { if (e.target === sModal) sModal.hidden = true; });
 
@@ -8850,7 +8880,7 @@ async function main() {
       const serverKeys = new Set(serverFavs.map(r => r.opening_key));
       for (const [k, side] of Object.entries(localFavsObj)) {
         if (!serverKeys.has(k)) {
-          api.putFavourite(k, side).catch(() => {});
+          api.putFavourite(k, side).catch(err => console.warn('[library] putFavourite failed', { key: k, err: err.message || err, status: err.status }));
         }
       }
       console.log('[library] favourites synced', { server: serverFavs.length, local: Object.keys(localFavsObj).length });
@@ -8919,7 +8949,7 @@ async function main() {
           for (const [k, side] of Object.entries(obj)) {
             const r = remote.find(x => x.opening_key === k);
             if (!r || r.side !== side) {
-              api.putFavourite(k, side).catch(() => {});
+              api.putFavourite(k, side).catch(err => console.warn('[library] putFavourite failed', { key: k, err: err.message || err, status: err.status }));
             }
           }
           for (const k of remoteKeys) {
