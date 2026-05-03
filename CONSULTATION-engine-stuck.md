@@ -1,22 +1,36 @@
 # Stockfish WASM "engine wedges mid-search" — second opinion request
 
+> **Update after first review (2026-05-03):** distribution corrected
+> from "lichess-org/stockfish-web" to **Chess.com / nmrugg/stockfish.js
+> (Stockfish 18)** — that's what the bundled `assets/stockfish/
+> stockfish-18.js` actually identifies as. Doesn't change the
+> symptoms but matters because nmrugg's wrapper queues `go` /
+> `setoption` while searching but does NOT queue `position` — so
+> our previous `stop(); position; go` same-tick pattern WAS
+> mutating position before the previous search ended. Single-flight
+> fix shipped (see "Update" at end).
+
 ## TL;DR
 
-Browser-based chess app using Stockfish WASM (the official lichess
-`stockfish-web` builds) keeps getting wedged mid-search. The engine
-emits a few `info` lines, then goes silent — never produces `bestmove`,
-ignores `stop`. UI hangs waiting. We've put watchdogs in place to
-unfreeze the UI, but the wedge keeps happening on every other game
-or so. Looking for a real fix or a different architectural approach.
+Browser-based chess app using **Stockfish 18 WASM (Chess.com /
+nmrugg/stockfish.js distribution)** keeps getting wedged mid-search.
+The engine emits a few `info` lines, then goes silent — never
+produces `bestmove`, ignores `stop`. UI hangs waiting. We've put
+watchdogs in place to unfreeze the UI, but the wedge keeps happening
+on every other game or so. Looking for a real fix or a different
+architectural approach.
 
 ---
 
 ## Stack
 
-- **Engine**: Stockfish 18 WASM, lichess `stockfish-web` distribution.
-  Default flavor = `full` (108 MB NNUE, multi-threaded). User has 32 GB
-  RAM, 64 cores, Edge on Windows. Threads=32. Page is COOP/COEP isolated
-  (verified `coop/coep: true` in the log).
+- **Engine**: Stockfish 18 WASM, **Chess.com / nmrugg/stockfish.js**
+  distribution (the JS file's `/*!` header confirms this — was
+  initially mis-attributed to lichess-stockfish-web). Default flavor
+  = `full` (108 MB NNUE, multi-threaded). User has 32 GB RAM,
+  64 cores, Edge on Windows. Page is COOP/COEP isolated (verified
+  `coop/coep: true` in the log). Thread default WAS hw/2 capped at
+  32 (so 32 threads on this user); now capped at 8 after consultation.
 - **Worker model**: One Web Worker per engine instance. Single search
   per worker at a time. UCI protocol over postMessage.
 - **Frontend**: Vanilla JS, chessground for the board, chess.js for
@@ -408,3 +422,54 @@ Either the wedge stops happening, or recovery is invisible (sub-second
 reboot, no UI hang).
 
 Thanks for taking a look.
+
+---
+
+## Update — fixes shipped after first round of feedback
+
+A reviewer pointed out (correctly):
+
+1. **The wrapper IS provoking the engine.** Our `start()` was sending
+   `stop` + `position` + `go` on the same JS tick. nmrugg/stockfish.js
+   does not queue `position` while searching → previous search's
+   internal state gets mutated.
+2. **32 threads on Windows/Edge is asking for trouble.** Cap practice
+   to 8.
+3. **`stop` is cooperative**; `worker.terminate()` is the real hard
+   stop.
+4. **Use `lastInfoAt` for stall detection.** 4-6s of silence during a
+   3-s search = wedged.
+5. **First-move latency is expected** — pthread worker creation +
+   NNUE warm + hash alloc on first search. Prewarm with a depth-1
+   dummy search after boot.
+
+Implemented fixes:
+
+- **Single-flight `start()`**: when called while `searching`, the
+  request is queued (only the LATEST is kept; older overwritten);
+  no new `position` / `go` is sent. The bestmove handler drains the
+  queue when the current search legitimately ends. We `_send('stop')`
+  to nudge the current search to wrap, but never overlap commands.
+- **Thread cap 32 → 8** for safety. Slider can still go higher for
+  pure analysis.
+- **Stall detector**: every `info` line resets a 6-s timer. If the
+  timer fires while still `_bestmoveAwaited`, dispatch synthetic-
+  stuck → main.js routes to flavor reboot recovery. Catches mid-
+  search wedges that the watchdog at 5×movetime would catch only
+  much later.
+- **Prewarm in boot()**: after `setoption Threads/Hash/Skill`, run
+  `position startpos` + `go depth 1` → await bestmove (5-s race) →
+  `ucinewgame` → `isready`/`readyok`. Forces pthread creation,
+  NNUE-pages touched, hash allocated. Bounded so a flaky boot
+  doesn't block forever.
+
+Open questions still relevant if these don't fully fix it:
+
+- Should we also `worker.terminate()` directly when the stall fires,
+  instead of going through synthetic-bestmove → flavor switch ritual?
+  The flavor switch is heavyweight (rebuild Engine instance, lite-
+  single warmup, full re-boot) — terminate + immediate re-boot of
+  the same flavor would be simpler.
+- Is the "lite-single warmup before MT reboot" still needed once
+  prewarm + thread-cap + single-flight are in place? It was
+  empirical; might be obsolete.

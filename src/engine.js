@@ -178,8 +178,17 @@ export class Engine extends EventTarget {
     //    4 cores -> 2 threads
     //    2 cores -> 1 thread
     // User can still crank higher via the UI slider for pure analysis.
+    //
+    // Cap dropped 32 → 8 after a 64-core/Edge user reproduced
+    // mid-search wedges with the 32-thread default. Stockfish WASM
+    // running 32 worker threads on Windows/Edge appears to exhibit
+    // a thread-pool instability that's not present at 8. For 3-second
+    // practice moves the extra threads buy almost no Elo and a lot
+    // of risk + heat. (GPT consultation feedback: cap at 4-8 for
+    // practice, 12 max.) The slider can still be cranked manually
+    // for pure analysis on a stable machine.
     const hw = navigator.hardwareConcurrency || 4;
-    const WASM_THREAD_CAP = 32;
+    const WASM_THREAD_CAP = 8;
     this.threads = spec.threaded
       ? Math.max(1, Math.min(Math.floor(hw / 2), WASM_THREAD_CAP))
       : 1;
@@ -281,6 +290,49 @@ export class Engine extends EventTarget {
 
     this._send('isready');
     await this._waitFor('readyok');
+
+    // ── PREWARM (per GPT consultation) ────────────────────────────
+    // First-move latency was significantly worse than subsequent
+    // moves — pthread workers are created on first search, NNUE
+    // pages get touched, hash is initialized. Burn that cost HERE
+    // with a depth-1 dummy search so the user's first real move
+    // feels as snappy as the second.
+    //   1. position startpos + go depth 1   →  forces pthread creation
+    //                                          + NNUE warm + hash alloc
+    //   2. await bestmove
+    //   3. ucinewgame                        →  clears the hash for the
+    //                                          real game-start state
+    //   4. isready / readyok                 →  drain ucinewgame before
+    //                                          we tell main.js we're ready
+    try {
+      const prewarmDone = new Promise((resolve) => {
+        const onMsg = (e) => {
+          const line = typeof e.data === 'string' ? e.data : '';
+          if (line.startsWith('bestmove')) {
+            this.worker.removeEventListener('message', onMsg);
+            resolve();
+          }
+        };
+        this.worker.addEventListener('message', onMsg);
+      });
+      this._send('position startpos');
+      this._send('go depth 1');
+      // Bound the wait so a flaky engine doesn't block boot forever.
+      await Promise.race([
+        prewarmDone,
+        new Promise(r => setTimeout(r, 5000)),
+      ]);
+      this._send('ucinewgame');
+      this._send('isready');
+      await Promise.race([
+        this._waitFor('readyok'),
+        new Promise(r => setTimeout(r, 3000)),
+      ]);
+      console.log('[engine] prewarm complete');
+    } catch (err) {
+      console.warn('[engine] prewarm step failed (continuing anyway)', err);
+    }
+
     this.ready = true;
     this.dispatchEvent(new CustomEvent('ready', {
       detail: { flavor, threaded: spec.threaded, threads: this.threads, activeNet: this.activeNet || null }
@@ -331,12 +383,14 @@ export class Engine extends EventTarget {
   /** Tear down the worker — for switching engine flavor. */
   terminate() {
     this.stop();
-    // Cancel any pending watchdog / health-check timers so they don't
-    // fire AFTER the worker is gone (would either be a no-op or could
-    // surface a synthetic-stuck event from a dead instance).
+    // Cancel any pending timers so they don't fire AFTER the worker
+    // is gone (would either be a no-op or could surface a synthetic-
+    // stuck event from a dead instance).
     if (this._watchdogId)    { clearTimeout(this._watchdogId);    this._watchdogId = 0; }
     if (this._healthCheckId) { clearTimeout(this._healthCheckId); this._healthCheckId = 0; }
+    if (this._stallTimer)    { clearTimeout(this._stallTimer);    this._stallTimer = 0; }
     this._bestmoveAwaited = false;
+    this._pendingRequest = null;
     if (this.worker) { this.worker.terminate(); this.worker = null; }
     this.ready = false;
   }
@@ -470,16 +524,70 @@ export class Engine extends EventTarget {
       console.log('[engine] start() ignored — engine not ready yet');
       return;
     }
-    // Simple synchronous path — no barrier. stop() + doStart same tick.
-    // The readyok-barrier approach stalled the engine when readyok was
-    // swallowed by a background bignet-swap _waitFor. Ghost-bestmove
-    // protection now lives in (a) main.js suppressing engine.start
-    // during SAN replay, (b) _pendingGos count below.
-    const wasSearching = this.searching;
-    this.stop();
-    // Track how many bestmoves we're still expecting from Stockfish's
-    // internal queue. Each `go` → exactly one bestmove. When rapid
-    // starts stack up, we want to DROP all but the last bestmove.
+    // ── SINGLE-FLIGHT POLICY (per GPT consultation) ────────────────
+    // Stockfish.js (nmrugg distribution) does NOT queue `position`
+    // commands while a search is alive. Sending stop+position+go on
+    // the same tick can mutate the position before the previous
+    // search has cleanly ended — primary suspect for the mid-search
+    // wedges we kept seeing. Fix: never send a new position+go
+    // until the previous bestmove has arrived (or the worker is
+    // terminated). Only the LATEST request is queued; rapid starts
+    // collapse to the most recent target FEN.
+    //
+    // Flow:
+    //   * Engine idle    → execute immediately (_doStart).
+    //   * Engine searching → store {fen, opts} in _pendingRequest;
+    //                        send `stop`. The bestmove handler's
+    //                        drain step runs the queued request.
+    //   * Engine wedged  → the inflight-stall watchdog terminates
+    //                      and reboots the worker; on next ready it
+    //                      drains _pendingRequest.
+    if (this.searching) {
+      const overwrote = !!this._pendingRequest;
+      this._pendingRequest = { fen, opts };
+      console.log('[engine] start() while searching — queued', {
+        searchId: this._searchId,
+        overwrote,
+        targetFen: fen.slice(0, 30) + '…',
+      });
+      // Tell the engine to wrap up so its bestmove fires soon.
+      // _pendingGos is NOT bumped here — there's no new `go` yet.
+      this._send('stop');
+      return;
+    }
+    this._pendingGos = (this._pendingGos || 0) + 1;
+    this._doStart(fen, opts);
+  }
+
+  // Internal: dispatch a synthetic stuck-bestmove so the UI unfreezes
+  // when the worker stops responding. Idempotent — repeated calls
+  // while _bestmoveAwaited is already false do nothing. The dispatched
+  // event has stuck:true so consumers (main.js practice handler) can
+  // route to auto-recovery (terminate + flavor reboot) instead of
+  // playing best=null onto the board.
+  _fireStuckSynthetic(reason) {
+    if (!this._bestmoveAwaited) return false;
+    console.error(`[engine] worker wedged (${reason}) — emitting synthetic bestmove`);
+    this._bestmoveAwaited = false;
+    this.searching = false;
+    if (this._stallTimer)    { clearTimeout(this._stallTimer);    this._stallTimer = 0; }
+    if (this._healthCheckId) { clearTimeout(this._healthCheckId); this._healthCheckId = 0; }
+    if (this._watchdogId)    { clearTimeout(this._watchdogId);    this._watchdogId = 0; }
+    this.dispatchEvent(new CustomEvent('bestmove', {
+      detail: { best: null, ponder: null, topMoves: [], history: this.history, stuck: true }
+    }));
+    return true;
+  }
+
+  // Internal: drain a queued request after the current search ends.
+  // Called from the bestmove handler. Only fires the latest request,
+  // discarding any older ones that were overwritten while searching.
+  _drainPendingRequest() {
+    if (!this._pendingRequest) return;
+    if (this.searching) return;   // shouldn't happen, defensive
+    const { fen, opts } = this._pendingRequest;
+    this._pendingRequest = null;
+    console.log('[engine] draining pending request', { fen: fen.slice(0, 30) + '…', opts });
     this._pendingGos = (this._pendingGos || 0) + 1;
     this._doStart(fen, opts);
   }
@@ -577,40 +685,22 @@ export class Engine extends EventTarget {
         responsive, infoReceived: this._infoReceived || 0,
       });
       this.stop();
-      // Two-stage post-stop check:
-      //   t+1.5s — if SILENT engine still hasn't sent bestmove,
-      //            it's wedged at boot. Synthetic-emit immediately.
-      //   t+5s   — even RESPONSIVE engines must eventually answer
-      //            our stop. If they haven't by 5 s past, the worker
-      //            is genuinely stuck (seen in the user's log: 196
-      //            info lines received then silence forever after
-      //            stop). Synthetic-emit so the UI unfreezes; the
-      //            practice handler in main.js will auto-recover by
-      //            rebooting the engine flavor.
-      const fireSynthetic = (reason) => {
-        if (!this._bestmoveAwaited) return false;
-        console.error(`[engine] worker wedged (${reason}) — emitting synthetic bestmove`);
-        this._bestmoveAwaited = false;
-        this.searching = false;
-        this.dispatchEvent(new CustomEvent('bestmove', {
-          detail: { best: null, ponder: null, topMoves: [], history: this.history, stuck: true }
-        }));
-        return true;
-      };
+      // Two-stage post-stop check (cf. _fireStuckSynthetic helper):
+      //   t+1.5s — silent at boot? declare wedged immediately.
+      //   t+5s   — hard backstop. responsive engines must answer
+      //            stop within 5 s. If they haven't by then, the
+      //            worker is genuinely stuck — fire synthetic so
+      //            the UI unfreezes + main.js routes to recovery.
       setTimeout(() => {
         if (!this._bestmoveAwaited) return;
         if (responsive) {
           console.warn('[engine] watchdog: responsive engine still owes bestmove after stop — waiting up to 5 s more');
           return;
         }
-        fireSynthetic('silent');
+        this._fireStuckSynthetic('silent');
       }, 1500);
-      // Hard backstop: 5 s after the watchdog fired, if STILL no
-      // bestmove regardless of earlier responsiveness, give up and
-      // fire synthetic. This is what was missing from the previous
-      // commit — responsive engines hung the UI forever.
       setTimeout(() => {
-        fireSynthetic('responsive but stop ignored');
+        this._fireStuckSynthetic('responsive but stop ignored');
       }, 5000);
     }, budget);
 
@@ -684,6 +774,19 @@ export class Engine extends EventTarget {
       // position the UI has moved on from.
       this._infoReceived = (this._infoReceived || 0) + 1;
       this._lastInfoAt = Date.now();
+      // Reset the stall watchdog (per GPT consultation): if info
+      // stops flowing for STALL_MS while we're still searching, the
+      // worker is wedged — fire a synthetic stuck-bestmove and let
+      // main.js auto-recover via switchEngineFlavor.
+      if (this._stallTimer) clearTimeout(this._stallTimer);
+      this._stallTimer = setTimeout(() => {
+        if (!this._bestmoveAwaited) return;
+        console.error('[engine] STALL: no info for 6s during search — declaring wedged', {
+          searchId: this._searchId,
+          infoReceived: this._infoReceived,
+        });
+        this._fireStuckSynthetic('stalled — no info 6s');
+      }, 6000);
       if (this.stopRequested) {
         this._infoDropped = (this._infoDropped || 0) + 1;
         return;
@@ -729,7 +832,8 @@ export class Engine extends EventTarget {
       this._bestmoveAwaited = false;
       this.stopRequested = false;
       if (this._healthCheckId) { clearTimeout(this._healthCheckId); this._healthCheckId = 0; }
-      if (this._watchdogId) { clearTimeout(this._watchdogId); this._watchdogId = 0; }
+      if (this._watchdogId)    { clearTimeout(this._watchdogId);    this._watchdogId = 0; }
+      if (this._stallTimer)    { clearTimeout(this._stallTimer);    this._stallTimer = 0; }
       this._applyPending();
       const m = line.match(/^bestmove\s+(\S+)(?:\s+ponder\s+(\S+))?/);
       const detail = {
@@ -747,6 +851,11 @@ export class Engine extends EventTarget {
         infoDispatched: this._infoDispatched,
       });
       this.dispatchEvent(new CustomEvent('bestmove', { detail }));
+      // Single-flight drain: if start() was called during the search
+      // that just ended, fire the queued request now.
+      try { this._drainPendingRequest(); } catch (err) {
+        console.warn('[engine] drainPendingRequest failed', err);
+      }
     }
   }
 }
