@@ -4096,6 +4096,22 @@ async function main() {
     // Exiting any active / finished practice game when a fresh board
     // starts. The practice card hides via CSS once the class is gone.
     practiceColor = null;
+    // CRITICAL: also reset board.playerColor to 'both'. Without this,
+    // the off-turn guard in board.js _onUserMove keeps rejecting moves
+    // for the OPPOSITE side of whatever the previous practice game's
+    // user-color was. Symptom: after a practice game as black,
+    // clicking New Game wouldn't let you play white's pieces — the
+    // log showed "target-first off-turn: not your move to make
+    // {turn: w, user: b}" forever. 'both' disables the guard so the
+    // user can move freely on a fresh board.
+    try {
+      board.playerColor = 'both';
+      const turn = board.chess.turn() === 'w' ? 'white' : 'black';
+      board.cg.set({
+        turnColor: turn,
+        movable: { color: 'both', dests: toDestsFrom(board.chess) },
+      });
+    } catch (err) { console.warn('[new-game] could not reset playerColor', err); }
     document.body.classList.remove('practice-mode', 'practice-thinking', 'practice-finished', 'analysis-archived');
     // Close any lingering learn-from-mistakes panel from the previous
     // game. Without this, the floating panel from the LAST game's
