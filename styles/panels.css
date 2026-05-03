@@ -1017,6 +1017,24 @@ details.dissect-details[open] summary {
   gap: 8px;
   margin: 12px 0;
 }
+
+/* Practice modal: pin the Start / Replay buttons at the bottom of the
+   modal card so they stay visible no matter how far the user has
+   scrolled through opening / strength / clock / variation settings.
+   The modal-card is already overflow-y:auto with max-height:80vh, so
+   position:sticky inside it pins to the visible bottom edge.
+   Scoped to #practice-modal so the same .tournament-actions class
+   in the actual tournament feature stays inline. */
+#practice-modal .tournament-actions {
+  position: sticky;
+  bottom: 0;
+  background: var(--c-bg);
+  margin: 12px -24px -24px;     /* extend edge-to-edge of the card */
+  padding: 12px 24px;
+  border-top: 1px solid var(--c-border, rgba(255,255,255,0.1));
+  box-shadow: 0 -6px 14px -4px rgba(0,0,0,0.55);
+  z-index: 5;
+}
 .tourn-standings {
   background: var(--c-bg-low);
   border-radius: var(--radius-small);
