@@ -577,25 +577,41 @@ export class Engine extends EventTarget {
         responsive, infoReceived: this._infoReceived || 0,
       });
       this.stop();
-      // Only fire the synthetic-stuck bestmove if the engine was
-      // SILENT (zero info lines). A responsive-but-slow engine will
-      // emit its own bestmove in response to our stop() — wait for it.
-      setTimeout(() => {
-        if (!this._bestmoveAwaited) return;
-        if (responsive) {
-          // Still waiting on a real bestmove from the stop. Give it
-          // another 3 s; if it never comes, we'll let the next search
-          // start clear _bestmoveAwaited via _doStart.
-          console.warn('[engine] watchdog: responsive engine still owes bestmove after stop — waiting');
-          return;
-        }
-        console.error('[engine] worker appears wedged (silent) — emitting synthetic bestmove');
+      // Two-stage post-stop check:
+      //   t+1.5s — if SILENT engine still hasn't sent bestmove,
+      //            it's wedged at boot. Synthetic-emit immediately.
+      //   t+5s   — even RESPONSIVE engines must eventually answer
+      //            our stop. If they haven't by 5 s past, the worker
+      //            is genuinely stuck (seen in the user's log: 196
+      //            info lines received then silence forever after
+      //            stop). Synthetic-emit so the UI unfreezes; the
+      //            practice handler in main.js will auto-recover by
+      //            rebooting the engine flavor.
+      const fireSynthetic = (reason) => {
+        if (!this._bestmoveAwaited) return false;
+        console.error(`[engine] worker wedged (${reason}) — emitting synthetic bestmove`);
         this._bestmoveAwaited = false;
         this.searching = false;
         this.dispatchEvent(new CustomEvent('bestmove', {
           detail: { best: null, ponder: null, topMoves: [], history: this.history, stuck: true }
         }));
+        return true;
+      };
+      setTimeout(() => {
+        if (!this._bestmoveAwaited) return;
+        if (responsive) {
+          console.warn('[engine] watchdog: responsive engine still owes bestmove after stop — waiting up to 5 s more');
+          return;
+        }
+        fireSynthetic('silent');
       }, 1500);
+      // Hard backstop: 5 s after the watchdog fired, if STILL no
+      // bestmove regardless of earlier responsiveness, give up and
+      // fire synthetic. This is what was missing from the previous
+      // commit — responsive engines hung the UI forever.
+      setTimeout(() => {
+        fireSynthetic('responsive but stop ignored');
+      }, 5000);
     }, budget);
 
     this._send(`position fen ${fen}`);
