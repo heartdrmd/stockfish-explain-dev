@@ -425,6 +425,113 @@ Thanks for taking a look.
 
 ---
 
+## ⚠️ Update 2 (after first round of fixes shipped)
+
+After applying single-flight start, thread cap 32→8, stall detector,
+and prewarm — the user reported the SAME symptom on a fresh login in
+a new browser. Captured a new diagnostic log and found something we
+missed in the first pass:
+
+```
+21:52:21.036  Stockfish worker error: {"isTrusted":true}
+21:52:21.036  Uncaught [object ErrorEvent]
+              @ stockfish-18.js:8:7756
+21:52:21.036  Stockfish worker error: {"isTrusted":true}
+21:52:21.036  Uncaught RuntimeError: memory access out of bounds
+              @ stockfish-18.wasm,worker:8:28163
+```
+
+This pattern repeats **102 times** in the same millisecond burst.
+The Stockfish WASM binary itself is hard-trapping with
+`memory access out of bounds`. Multiple worker threads all hit it
+at once. **This is happening on a fresh boot, during the first
+infinite search at the start position.** No prior search, no rapid
+start/stop, no prewarm conflict — clean state, vanilla
+`go infinite`, multi-thread = 8.
+
+The wedges we've been chasing the entire conversation are almost
+certainly the visible symptom of this underlying WASM crash:
+1. Worker thread traps silently (the `Uncaught` is in a worker, not
+   the main thread, so JS doesn't propagate it)
+2. Main thread keeps waiting for `bestmove` that will never arrive
+3. Our stall detector at 6 s fires synthetic
+4. Auto-recovery rebuilds the worker → sometimes lucky (resumes),
+   sometimes immediately re-crashes
+
+We caught this only because the user just downloaded the log
+during the crash window. Earlier logs showed the WEDGE
+(no info for X seconds) but not the underlying CRASH (memory
+out of bounds in the worker), because we weren't grepping for
+the crash explicitly.
+
+### Specific questions for GPT, given this new evidence
+
+A. **Is `memory access out of bounds` in `stockfish-18.wasm,worker`
+   a known issue with Chess.com / nmrugg/stockfish.js at moderate
+   thread counts (8 threads on Windows / Edge)?** Searching the
+   issue tracker would help — anything similar reported? Is there
+   a known-good Threads ceiling for this build on Chrome / Edge?
+
+B. **Switching distribution to lichess-org/stockfish-web** — would
+   you recommend this over nmrugg for browser stability? Lichess
+   actively maintains theirs against their own production traffic
+   (millions of analyses/day); they use the smallnet→bignet
+   hot-swap pattern. Tradeoff: it's an ES module worker (`type:
+   "module"`) instead of a classic worker — might cascade other
+   changes.
+
+C. **Validating NNUE network integrity at boot** — could the
+   memory access OOB be caused by a partial/corrupt 108 MB NNUE
+   download? We don't checksum the .nnue file. Would you suggest
+   we (a) ship the smaller NNUE by default, (b) hash-validate the
+   bigger one, or (c) use lichess's external-NNUE flow with the
+   smallnet→bignet hot-swap which lets the engine boot even if
+   the bignet fails to download?
+
+D. **Worker error event catch** — we already get
+   `worker.onerror` events. Right now we just log them. Should we
+   IMMEDIATELY `worker.terminate()` and reboot on the FIRST one,
+   instead of waiting 6 s for the stall detector to notice?
+   Existing behaviour is too lazy.
+
+E. **Memory budget on WASM Stockfish 8 threads** — 8 thread stacks
+   (default 8 MB each = 64 MB) + 256 MB hash + 108 MB bignet +
+   eval working memory. Total ~450 MB. WASM linear memory caps at
+   2 GB or 4 GB depending on the build flag. Could a particular
+   sequence of operations push us into a region the build wasn't
+   compiled for? How would we tell?
+
+F. **Stable defaults for browser-based Stockfish** — for a
+   product that runs across desktops, mobile, and various Chrome
+   forks (Edge, Brave), what would you recommend as the safe
+   default?
+   - Threads: ours is 8, lichess defaults to ~min(navigator.hwc, 13)
+     but they cap at 13 hard
+   - Hash MB: ours is 256 MB
+   - NNUE: full vs lite vs hot-swap
+
+### What we'll likely ship before next consult
+
+Pending your response, the plan is:
+
+1. **Default flavor: full → lite** (13 MB NNUE, much less memory
+   pressure, ~150 Elo weaker but stable). User can still pick
+   `full` from the toolbar dropdown.
+2. **Threads cap 8 → 4** (defensive; lichess caps at 13 but we're
+   seeing crashes at 8 on this user's Edge, which suggests
+   distribution-specific instability at moderate counts).
+3. **`worker.onerror` triggers immediate terminate + reboot** —
+   stop waiting for the stall detector, react to the crash signal
+   directly.
+4. (If those don't fix it) Migrate the engine binary from
+   nmrugg/stockfish.js to lichess-org/stockfish-web. We already
+   have a `sf-fast` flavor entry for it — promoting that to the
+   default.
+
+Looking forward to your read on this.
+
+---
+
 ## Update — fixes shipped after first round of feedback
 
 A reviewer pointed out (correctly):
