@@ -2978,13 +2978,35 @@ async function main() {
       // NOT for games loaded from the archive — so if the user
       // clicks Learn on an archived game, we run it on-demand.
       // Skips if already verified or no candidates.
+      // ── First: retrospective sweep if the eval cache is sparse.
+      // The auto-sweep at game-end was removed (it was hijacking
+      // the engine the moment the user wanted to analyze freely).
+      // Now we run sweep + verify on-demand right here, the moment
+      // the user actually opts in to learning. Result: free analysis
+      // works seamlessly post-game, and Learn does its prep when
+      // clicked — same final outcome, better UX.
+      const sweepKey = board.startingFen + '|' + (board.chess.history().join(',') || '');
+      if (window.__mistakesSweptForFen !== sweepKey) {
+        try {
+          if (ui.narrationText) {
+            ui.narrationText.innerHTML = '🔍 Scanning each move for mistakes…';
+          }
+          await retrospectiveSweep({ minDepth: 12 });
+          window.__mistakesSweptForFen = sweepKey;
+        } catch (err) { console.warn('[learn] sweep failed', err); }
+      }
       const candidates = _findMistakePlies();
-      if (candidates.length === 0) return;
+      if (candidates.length === 0) {
+        if (ui.narrationText) {
+          ui.narrationText.innerHTML = '🎉 No mistakes found in this game — clean play!';
+        }
+        return;
+      }
       if (!window.__mistakesVerifiedForFen ||
-          window.__mistakesVerifiedForFen !== board.startingFen + '|' + (board.chess.history().join(',') || '')) {
+          window.__mistakesVerifiedForFen !== sweepKey) {
         try {
           await verifyMistakesAtMaxStrength();
-          window.__mistakesVerifiedForFen = board.startingFen + '|' + (board.chess.history().join(',') || '');
+          window.__mistakesVerifiedForFen = sweepKey;
         } catch (err) {
           console.warn('[learn] verify failed, proceeding anyway', err);
         }
@@ -6170,72 +6192,48 @@ async function main() {
     try { stopClock(); } catch {}
     // Draft is no longer needed.
     clearDraft();
-    // Run a retrospective sweep in the BACKGROUND — fills in per-move
-    // evals for plies the engine didn't evaluate live, so the eval
-    // timeline + accuracy strip have data. NOT awaited at the user-
-    // visible level: the user gets free-analysis access immediately,
-    // and the sweep auto-aborts the moment they move / navigate
-    // (sweepAbort wired into board 'move' / 'nav' below). When they're
-    // idle again, fireAnalysis kicks live analysis on the current
-    // position.
-    //
-    // Verify pass (full-strength MultiPV=20) is NO LONGER auto-run.
-    // It used to lock the engine for 5 s × number of mistakes — user
-    // resigned + immediately wanted to analyze, but the engine was
-    // busy. Verify now runs ON-DEMAND when the user clicks 🎓 Learn
-    // (existing Learn button handler awaits it before walking the
-    // mistakes — same outcome, just deferred until the user actually
-    // wants it).
-    (async () => {
-      ui.narrationText.innerHTML =
-        `🏁 Game over — <strong>${resultTag}</strong> — ${narrative}. Free analysis ready — engine is yours. (Mistake-bank scan running in the background.)`;
-      try {
-        await retrospectiveSweep({
-          minDepth: 12,
-          onProgress: (d, t) => {
-            // Only update narration if user hasn't replaced it (e.g.
-            // by interacting). Don't fight for the spotlight.
-            if (ui.narrationText && ui.narrationText.innerHTML.includes('Mistake-bank scan running')) {
-              ui.narrationText.innerHTML =
-                `🏁 Game over — <strong>${resultTag}</strong> — ${narrative}. Free analysis ready. (Mistake-bank scan ${d}/${t} in the background.)`;
-            }
-          },
-        });
-      } catch (err) { console.warn('[sweep] failed', err); }
-      try {
-        archiveCurrentGame({ result: resultTag, ending: narrative, mode: 'practice' });
-      } catch (err) {
-        console.warn('[archive] failed to archive practice game', err);
+    // ── Engine: switch to free-analysis IMMEDIATELY (per user) ───
+    // Restore the user's toolbar Skill / MultiPV (the practice game
+    // may have set them lower) and fire live analysis on the final
+    // position right now — BEFORE the background sweep starts. The
+    // sweep then runs alongside (engine is single-flight, so the
+    // sweep's first probe will queue behind this analysis; the
+    // sweep's bestmoves drain the queue back to live analysis).
+    // Net: user sees the engine eval bar move within ~1 s of
+    // resigning instead of waiting for the sweep to finish.
+    try {
+      const prefMultiPV = ui.rangeMultipv ? +ui.rangeMultipv.value : null;
+      const prefSkill   = ui.rangeSkill   ? +ui.rangeSkill.value   : null;
+      if (prefMultiPV && prefMultiPV > 0 && prefMultiPV !== engine.multipv) {
+        engine.setMultiPV(prefMultiPV);
       }
-      updateLearnButton();
-      // Explicitly restore the engine to the user's TOOLBAR preferences
-      // (Skill Level + MultiPV) before kicking live analysis. The post-
-      // game chain (retrospectiveSweep + verifyMistakesAtMaxStrength +
-      // opening-variation forks during the game) can each transiently
-      // change engine.skill or engine.multipv; if any of those restore
-      // paths miss, live review shows the wrong number of PV lines or
-      // a skill-capped eval. User reported engine 'needed off/on to get
-      // going' because MultiPV was stuck at 5 (variation-mode) instead
-      // of their toolbar 3. Force-set to the slider values, regardless
-      // of what engine state we happen to be in.
-      try {
-        const prefMultiPV = ui.rangeMultipv ? +ui.rangeMultipv.value : null;
-        const prefSkill   = ui.rangeSkill   ? +ui.rangeSkill.value   : null;
-        if (prefMultiPV && prefMultiPV > 0 && prefMultiPV !== engine.multipv) {
-          console.log('[practice] post-game: restoring engine MultiPV', { from: engine.multipv, to: prefMultiPV });
-          engine.setMultiPV(prefMultiPV);
-        }
-        if (prefSkill != null && prefSkill !== engine.skill) {
-          console.log('[practice] post-game: restoring engine Skill', { from: engine.skill, to: prefSkill });
-          engine.setSkill(prefSkill);
-        }
-      } catch (err) { console.warn('[practice] post-game restore failed', err); }
-      // Kick LIVE analysis on the final position. retrospectiveSweep
-      // held the engine hostage for the per-ply sweep, so by the time
-      // this async chain finishes the engine is idle and no one is
-      // driving the eval bar / PV lines.
-      try { fireAnalysis(); } catch {}
-    })();
+      if (prefSkill != null && prefSkill !== engine.skill) {
+        engine.setSkill(prefSkill);
+      }
+    } catch (err) { console.warn('[practice] post-game restore failed', err); }
+    try { fireAnalysis(); } catch {}
+    // Archive immediately (synchronous, not engine-bound). The
+    // retrospective sweep is NO LONGER auto-run — it kept stealing
+    // the engine away from the user's free analysis at exactly the
+    // moment they wanted to use it. Sweep + verify both happen
+    // on-demand when the user clicks 🎓 Learn from your mistakes
+    // (its handler awaits both before walking through the mistakes).
+    // Live engine analysis is now uninterrupted post-game.
+    //
+    // What we lose: the eval timeline + accuracy strip start mostly
+    // empty after game-end. They fill in as the user navigates the
+    // game (each board nav triggers a fresh fireAnalysis whose
+    // thinking listener writes to fenEvalCache). And/or instantly
+    // when Learn is clicked. Acceptable trade for "engine works the
+    // moment the game ends."
+    ui.narrationText.innerHTML =
+      `🏁 Game over — <strong>${resultTag}</strong> — ${narrative}. Free analysis is on the live position. Click 🎓 Learn from your mistakes to scan + walk your mistakes.`;
+    try {
+      archiveCurrentGame({ result: resultTag, ending: narrative, mode: 'practice' });
+    } catch (err) {
+      console.warn('[archive] failed to archive practice game', err);
+    }
+    updateLearnButton();
     // Swap the card UI into post-game state
     const pLive = document.getElementById('practice-live');
     const pOver = document.getElementById('practice-over');
