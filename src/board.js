@@ -598,6 +598,32 @@ export class BoardController extends EventTarget {
       }
       this.viewPly = null;
       this._historicalChess = null;    // no longer needed
+      // POST-GAME REPLACE-MAINLINE: when the game has finished
+      // (practice-finished) or the user is in free analysis on a
+      // previously-archived game (analysis-archived), playing a move
+      // from a historical ply REPLACES the rest of the mainline
+      // instead of creating a sibling variation. User asked for
+      // edit-the-game semantics: "take a back move and play a new
+      // one [should] stay as main line of the game". The original
+      // game stays gospel via board._archiveSnapshot which was
+      // frozen at game-end time and never touched after — so the
+      // saved/exported PGN is unaffected by this re-edit.
+      try {
+        const cls = document.body.classList;
+        const isPostGame = cls.contains('practice-finished') ||
+                           cls.contains('analysis-archived');
+        if (isPostGame && this.tree && this.tree.currentPath != null) {
+          const cur = this.tree.nodeAtPath(this.tree.currentPath);
+          if (cur && cur.children && cur.children.length) {
+            console.log('[move] post-game mainline-replace: dropping continuation children', {
+              path: this.tree.currentPath, dropped: cur.children.length,
+            });
+            cur.children = [];
+          }
+        }
+      } catch (err) {
+        console.warn('[move] post-game mainline-replace failed (continuing as variation)', err);
+      }
     }
 
     const piece = this.chess.get(orig);

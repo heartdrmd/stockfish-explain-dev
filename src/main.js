@@ -2616,6 +2616,15 @@ async function main() {
         <span class="retro-counter" title="Solved / current / total">${solved} · ${idx} / ${total}</span>
         <button class="retro-close" id="learn-close" title="Close">×</button>
       </div>`;
+    // Will the next-action button advance to another mistake or end
+    // the session? Used to swap "Next ▶" → "Done ✓" on the LAST one.
+    const allRemaining = _findMistakePlies();
+    const hasMoreUnsolved = allRemaining.some(p =>
+      p !== _learn.targetPly && !_learn.solvedPlies.has(p));
+    const continueBtn = hasMoreUnsolved
+      ? `<button class="retro-btn retro-continue" id="learn-next">Next ▶</button>`
+      : `<button class="retro-btn retro-continue" id="learn-finish">✓ Done</button>`;
+
     let inner = '';
     if (state === 'find') {
       inner = `
@@ -2638,7 +2647,7 @@ async function main() {
         </div>
         <p class="retro-played" style="opacity:0.8;">That keeps you in the game.</p>
         <div class="retro-choices">
-          <button class="retro-btn retro-continue" id="learn-next">Next ▶</button>
+          ${continueBtn}
         </div>`;
     } else if (state === 'fail') {
       const diffPct = _learn.lastDiffPct;
@@ -2661,7 +2670,7 @@ async function main() {
         <p class="retro-prompt">Best was <strong>${_learn.bestSan || '?'}</strong></p>
         <p class="retro-played">Evaluation after best: <strong>${_learn.bestEvalFmt || '?'}</strong></p>
         <div class="retro-choices">
-          <button class="retro-btn retro-continue" id="learn-next">Next mistake ▶</button>
+          ${continueBtn}
         </div>`;
     } else if (state === 'end') {
       inner = `
@@ -2675,6 +2684,14 @@ async function main() {
     p.innerHTML = titleBar + `<div class="retro-body">${inner}</div>`;
     p.querySelector('#learn-close')?.addEventListener('click', _closeLearnPanel);
     p.querySelector('#learn-close-end')?.addEventListener('click', _closeLearnPanel);
+    // ✓ Done — last-mistake variant of the next button. Marks the
+    // current mistake solved (so the counter shows N/N) and closes
+    // the panel cleanly. Skips the 'end' summary screen since the
+    // user already worked through every mistake.
+    p.querySelector('#learn-finish')?.addEventListener('click', () => {
+      if (_learn.targetPly) _learn.solvedPlies.add(_learn.targetPly);
+      _closeLearnPanel();
+    });
     p.querySelector('#learn-next')?.addEventListener('click', _goNextMistake);
     p.querySelector('#learn-skip')?.addEventListener('click', _goNextMistake);
     p.querySelector('#learn-solution')?.addEventListener('click', _showSolution);
@@ -2745,6 +2762,7 @@ async function main() {
     const cachedBest = _verifierBest.get(prev.fen);
     if (cachedBest) {
       _learn.bestSan = cachedBest.san;
+      _learn.bestUci = cachedBest.uci;
       _learn.bestEvalFmt = cachedBest.evalFmt;
       _learn.solvedPlies.add(_learn.targetPly);
       try {
@@ -2798,6 +2816,7 @@ async function main() {
       const cpPov = stm === 'w' ? cp : -cp;
       const bestUci = ev.detail?.best;
       if (bestUci) {
+        _learn.bestUci = bestUci;
         try {
           const c = new Chess(prev.fen);
           const m = c.move({ from: bestUci.slice(0,2), to: bestUci.slice(2,4), promotion: bestUci[4] || undefined });
@@ -2840,6 +2859,12 @@ async function main() {
     _learn.prevFen = prev.fen;
     _learn.playedSan = cur.san;
     _learn.bestBeforeCpWhite = prev.cpWhite ?? 0;
+    // Clear any solution-revealed state from the previous mistake so
+    // the "user already saw solution" shortcut in onMove doesn't
+    // wrongly trigger on a different position's bestUci.
+    _learn.bestUci = null;
+    _learn.bestSan = null;
+    _learn.bestEvalFmt = null;
     const stm = prev.fen.split(' ')[1];
     _learn.solverColor = stm === 'w' ? 'w' : 'b';
     // Clear any arrow from a previous mistake (the 'View solution'
@@ -2879,6 +2904,20 @@ async function main() {
         ? mv.from + mv.to + (mv.promotion || '')
         : null;
       const postFen = board.fen();
+      // ── ALREADY-SAW-SOLUTION SHORTCUT ─────────────────────────
+      // If the user clicked Show Solution earlier this attempt and
+      // is now playing the move they were shown, we already KNOW
+      // it's the best move. No probe needed. Instant win render.
+      // This was the user's specific complaint: "if i say show
+      // solution and play it..it shouldn't try to evaluate it..
+      // it already did."
+      const knownBestUci = (_learn.bestUci || '').toLowerCase();
+      if (userUci && knownBestUci && userUci.toLowerCase() === knownBestUci) {
+        console.log('[learn-mode] user played the already-shown solution — instant win, no probe');
+        _learn.lastDiffPct = 0;
+        _renderLearnPanel('win');
+        return;
+      }
       // ── CACHE-FIRST GRADING ───────────────────────────────────
       // verifyMistakesAtMaxStrength runs MultiPV=20 at each pre-
       // mistake FEN, so fenEvalCache already holds an eval for
@@ -2952,9 +2991,9 @@ async function main() {
       };
       engine.addEventListener('bestmove', onBest);
       if (userUci) {
-        engine.start(_learn.prevFen, { movetime: 3000, searchmoves: [userUci] });
+        engine.start(_learn.prevFen, { movetime: 2000, searchmoves: [userUci] });
       } else {
-        engine.start(postFen, { movetime: 3000 });
+        engine.start(postFen, { movetime: 2000 });
       }
     };
     board.addEventListener('move', onMove);
@@ -3278,27 +3317,20 @@ async function main() {
     try { if (typeof updateLearnButton === 'function') updateLearnButton(); } catch {}
     try { engine.stop(); } catch {}
     engine.setSkill(20);
-    // MultiPV=20 during verify so the engine returns top 20 candidate
-    // moves at each pre-mistake position (was 5). The thinking listener
-    // auto-populates fenEvalCache with the post-move FEN + cp eval for
-    // EACH of those 20 candidates. With ~30-40 legal moves in a typical
-    // middlegame position, top-20 covers virtually every reasonable
-    // move a human would play — so cache hits dominate over fresh
-    // probes in learn mode.
-    //
-    // Tradeoff vs MultiPV=5: each line gets ~depth 18-20 instead of
-    // depth 22-25 in the same 5 s budget. Plenty of depth for
-    // grading purposes; the move's quality classification is stable
-    // long before depth 25.
-    engine.setMultiPV(20);
+    // MultiPV during verify returns top-N candidate moves at each
+    // pre-mistake position. The thinking listener auto-populates
+    // fenEvalCache with the post-move FEN + cp eval for EACH
+    // candidate, so user guesses graded from cache (no probe).
+    // Verify probe params (trimmed per user feedback "never more
+    // than 5 seconds"): 3-s probes at MultiPV=12 — depth 16-18 in
+    // 3s, top-12 covers ~all reasonable user guesses. Total wait
+    // for a typical 3-mistake game = ~9s. Was 5s × MultiPV=20.
+    engine.setMultiPV(12);
     try {
       for (const fen of fens) {
         try {
-          // 5 s, skill 20, multipv 20 — also captures top moves so
-          // _showSolution can render the answer instantly with no
-          // re-probe. The result.lines[] gives us the engine's #1
-          // pick + its eval for THIS pre-mistake fen.
-          const result = await AICoach.probeEngine(engine, fen, 0, 20, 5000);
+          // 3 s, skill 20, multipv 12.
+          const result = await AICoach.probeEngine(engine, fen, 0, 12, 3000);
           const top = result?.lines?.[0];
           if (top && top.uci) {
             const stm = fen.split(' ')[1];
@@ -3964,6 +3996,14 @@ async function main() {
     // starts. The practice card hides via CSS once the class is gone.
     practiceColor = null;
     document.body.classList.remove('practice-mode', 'practice-thinking', 'practice-finished', 'analysis-archived');
+    // Close any lingering learn-from-mistakes panel from the previous
+    // game. Without this, the floating panel from the LAST game's
+    // Show Solution / mistake walk stays glued to the screen when
+    // the user clicks "Same opening again" — looks like a random
+    // pop-up on the new game.
+    if (typeof _closeLearnPanel === 'function') {
+      try { _closeLearnPanel(); } catch {}
+    }
     // Re-arm learn-mode auto-enter on the next game + clear the
     // verifier-best cache (different game = different positions).
     if (typeof _learn !== 'undefined') _learn.userDismissed = false;
