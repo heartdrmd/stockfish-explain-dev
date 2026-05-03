@@ -8770,7 +8770,175 @@ async function main() {
     window.__currentUser = u;
     renderAuthUi();
     if (u) syncLocalGamesToCloud();
+    // Pull favourites + custom openings from server into localStorage
+    // so the existing reader code paths see cloud-synced data on every
+    // refresh (and on every device). Then arm the mirror that POSTs
+    // any future localStorage writes back up to the server.
+    try { await syncLibraryFromServer(); } catch (err) { console.warn('[library] initial sync failed', err); }
+    armLibraryWriteMirror();
   })();
+
+  // ─── Library sync (favourites + custom openings) ──────────────────
+  // Cross-device persistence for the practice opening picker. Server
+  // is source of truth; localStorage is the offline cache that all
+  // existing client code already reads from.
+  //
+  // Flow:
+  //   1. Boot → fetch /api/favourites + /api/custom-openings, MERGE
+  //      with whatever's already in localStorage (server entries win
+  //      for any conflict on the same key/path).
+  //   2. Push any local-only entries up to the server (initial migrate).
+  //   3. Mirror future writes by intercepting localStorage.setItem and
+  //      .removeItem for the two keys; debounced fire-and-forget POSTs.
+  //
+  // Works for guests too — api.js sends the X-Guest-Id header so the
+  // server scopes everything to the browser's stable token.
+  const FAVS_KEY_FOR_SYNC   = 'stockfish-explain.practice-favourites';
+  const CUSTOM_KEY_FOR_SYNC = 'stockfish-explain.practice-custom-openings';
+
+  async function syncLibraryFromServer() {
+    let serverFavs = null, serverCustoms = null;
+    try { serverFavs = (await api.listFavourites()).favourites || []; } catch {}
+    try { serverCustoms = (await api.listCustomOpenings()).openings || []; } catch {}
+
+    // ── Favourites merge ──
+    const localFavsObj = (() => {
+      try { const v = JSON.parse(localStorage.getItem(FAVS_KEY_FOR_SYNC) || '{}'); return typeof v === 'object' && v ? v : {}; }
+      catch { return {}; }
+    })();
+    if (serverFavs) {
+      const merged = { ...localFavsObj };
+      for (const row of serverFavs) merged[row.opening_key] = row.side || 'white';
+      try { localStorage.setItem(FAVS_KEY_FOR_SYNC, JSON.stringify(merged)); } catch {}
+      // Push local-only entries up.
+      const serverKeys = new Set(serverFavs.map(r => r.opening_key));
+      for (const [k, side] of Object.entries(localFavsObj)) {
+        if (!serverKeys.has(k)) {
+          api.putFavourite(k, side).catch(() => {});
+        }
+      }
+      console.log('[library] favourites synced', { server: serverFavs.length, local: Object.keys(localFavsObj).length });
+    }
+
+    // ── Custom openings merge ──
+    const localCustoms = (() => {
+      try { const v = JSON.parse(localStorage.getItem(CUSTOM_KEY_FOR_SYNC) || '[]'); return Array.isArray(v) ? v : []; }
+      catch { return []; }
+    })();
+    if (serverCustoms) {
+      const pathOf = (c) => `${c.group_name || c.group}//${c.opening_name || c.name}`;
+      const serverPaths = new Map(serverCustoms.map(c => [pathOf(c), c]));
+      // Server entries override local ones at the same path.
+      const merged = [];
+      const seen = new Set();
+      for (const c of serverCustoms) {
+        merged.push({
+          group: c.group_name,
+          name: c.opening_name,
+          moves: (c.moves_san || '').split(/\s+/).filter(Boolean),
+          fen: c.starting_fen || null,
+          side: c.side || 'white',
+          _custom: true,
+        });
+        seen.add(pathOf({ group_name: c.group_name, opening_name: c.opening_name }));
+      }
+      // Keep local-only customs AND push them to the server.
+      for (const c of localCustoms) {
+        const path = `${c.group}//${c.name}`;
+        if (seen.has(path)) continue;
+        merged.push(c);
+        // Upload it.
+        api.saveCustomOpening({
+          group_name: c.group,
+          opening_name: c.name,
+          moves_san: (c.moves || []).join(' '),
+          starting_fen: c.fen || null,
+          side: c.side || null,
+        }).catch(() => {});
+      }
+      try { localStorage.setItem(CUSTOM_KEY_FOR_SYNC, JSON.stringify(merged)); } catch {}
+      console.log('[library] custom openings synced', { server: serverCustoms.length, local: localCustoms.length });
+    }
+  }
+
+  function armLibraryWriteMirror() {
+    if (window.__libraryMirrorArmed) return;
+    window.__libraryMirrorArmed = true;
+    const origSet = localStorage.setItem.bind(localStorage);
+    const origRemove = localStorage.removeItem.bind(localStorage);
+    // Debounce server pushes so a rapid sequence of writes (e.g. user
+    // toggling several favourites quickly) collapses into one round-trip.
+    let favsPushTimer = 0;
+    let customsPushTimer = 0;
+    const schedulePushFavs = (val) => {
+      clearTimeout(favsPushTimer);
+      favsPushTimer = setTimeout(async () => {
+        try {
+          const obj = JSON.parse(val || '{}');
+          // Naive full-state push: list server, diff, PUT additions /
+          // DELETE removals. Cheaper than maintaining diff state on
+          // the client given how rare favourites changes are.
+          const remote = (await api.listFavourites()).favourites || [];
+          const remoteKeys = new Set(remote.map(r => r.opening_key));
+          for (const [k, side] of Object.entries(obj)) {
+            const r = remote.find(x => x.opening_key === k);
+            if (!r || r.side !== side) {
+              api.putFavourite(k, side).catch(() => {});
+            }
+          }
+          for (const k of remoteKeys) {
+            if (!(k in obj)) api.deleteFavourite(k).catch(() => {});
+          }
+        } catch (err) { console.warn('[library] favs push failed', err); }
+      }, 600);
+    };
+    const schedulePushCustoms = (val) => {
+      clearTimeout(customsPushTimer);
+      customsPushTimer = setTimeout(async () => {
+        try {
+          const arr = JSON.parse(val || '[]');
+          if (!Array.isArray(arr)) return;
+          const remote = (await api.listCustomOpenings()).openings || [];
+          const remotePaths = new Set(remote.map(r => `${r.group_name}//${r.opening_name}`));
+          const localPaths = new Set();
+          for (const c of arr) {
+            const path = `${c.group}//${c.name}`;
+            localPaths.add(path);
+            api.saveCustomOpening({
+              group_name: c.group,
+              opening_name: c.name,
+              moves_san: (c.moves || []).join(' '),
+              starting_fen: c.fen || null,
+              side: c.side || null,
+            }).catch(() => {});
+          }
+          for (const r of remote) {
+            const path = `${r.group_name}//${r.opening_name}`;
+            if (!localPaths.has(path)) {
+              api.deleteCustomOpening({ group_name: r.group_name, opening_name: r.opening_name }).catch(() => {});
+            }
+          }
+        } catch (err) { console.warn('[library] customs push failed', err); }
+      }, 600);
+    };
+    localStorage.setItem = function(key, value) {
+      const result = origSet(key, value);
+      try {
+        if (key === FAVS_KEY_FOR_SYNC)        schedulePushFavs(value);
+        else if (key === CUSTOM_KEY_FOR_SYNC) schedulePushCustoms(value);
+      } catch {}
+      return result;
+    };
+    localStorage.removeItem = function(key) {
+      const result = origRemove(key);
+      try {
+        if (key === FAVS_KEY_FOR_SYNC)        schedulePushFavs('{}');
+        else if (key === CUSTOM_KEY_FOR_SYNC) schedulePushCustoms('[]');
+      } catch {}
+      return result;
+    };
+    console.log('[library] write mirror armed');
+  }
 
   // ─── Auto-sync local archive → Postgres on login ────────────────
   // Anything in the local archive that has NOT been uploaded yet

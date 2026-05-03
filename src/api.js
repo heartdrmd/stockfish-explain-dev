@@ -101,6 +101,19 @@ export const api = {
     const qs = new URLSearchParams(Object.entries(merged).filter(([,v]) => v != null && v !== ''));
     return '/api/games/export.pgn' + (qs.toString() ? '?' + qs : '');
   },
+
+  // ── Library: favourites + custom openings (cross-device persist) ──
+  listFavourites:    ()                => req('GET',    '/api/favourites'),
+  putFavourite:      (opening_key, side) => req('PUT', '/api/favourites', { opening_key, side }),
+  deleteFavourite:   (opening_key)     => req('DELETE', '/api/favourites?key=' + encodeURIComponent(opening_key)),
+
+  listCustomOpenings: ()                => req('GET',    '/api/custom-openings'),
+  saveCustomOpening:  (op)              => req('POST',   '/api/custom-openings', op),
+  deleteCustomOpening: ({ id, group_name, opening_name }) => {
+    if (id) return req('DELETE', '/api/custom-openings?id=' + id);
+    const qs = new URLSearchParams({ group: group_name, name: opening_name });
+    return req('DELETE', '/api/custom-openings?' + qs.toString());
+  },
 };
 
 // Convenience: return current user or null (catches 401).

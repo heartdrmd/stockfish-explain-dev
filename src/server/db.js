@@ -212,6 +212,55 @@ const migrations = [
         WHERE guest_id IS NOT NULL;
     `,
   },
+  {
+    // Cross-device persistence for the practice opening picker:
+    //   - favourites:       which openings the user has starred + side
+    //   - custom_openings:  user-saved opening definitions (name, group,
+    //                       SAN moves, optional starting FEN)
+    //
+    // Both tables use the same (user_id XOR guest_id) ownership pattern
+    // we introduced for games — works for logged-in users AND guests
+    // (scoped by the X-Guest-Id header / token). Existing rows in
+    // `favourites` (006 migration) had user_id NOT NULL — we relax that
+    // here so guests can use the table too.
+    name: '011_favourites_and_custom_openings_dual_owner',
+    sql: `
+      -- Favourites: relax user_id, add guest_id, switch primary key.
+      ALTER TABLE favourites ALTER COLUMN user_id DROP NOT NULL;
+      ALTER TABLE favourites ADD COLUMN IF NOT EXISTS guest_id TEXT;
+      ALTER TABLE favourites DROP CONSTRAINT IF EXISTS favourites_pkey;
+      ALTER TABLE favourites DROP CONSTRAINT IF EXISTS favourites_owner_xor;
+      ALTER TABLE favourites ADD CONSTRAINT favourites_owner_xor
+        CHECK ((user_id IS NOT NULL) <> (guest_id IS NOT NULL));
+      -- Composite PK over BOTH possible owner columns + opening_key.
+      -- COALESCE-based unique index so (user_id IS NULL, guest_id) and
+      -- (user_id, guest_id IS NULL) both behave as expected.
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_favourites_owner_key
+        ON favourites(COALESCE(user_id::text, ''), COALESCE(guest_id, ''), opening_key);
+      CREATE INDEX IF NOT EXISTS idx_favourites_guest
+        ON favourites(guest_id) WHERE guest_id IS NOT NULL;
+
+      -- New table for custom openings.
+      CREATE TABLE IF NOT EXISTS custom_openings (
+        id            SERIAL PRIMARY KEY,
+        user_id       INT REFERENCES users(id) ON DELETE CASCADE,
+        guest_id      TEXT,
+        group_name    TEXT NOT NULL,         -- "My openings", "Sicilian variations", etc.
+        opening_name  TEXT NOT NULL,         -- user-given label
+        moves_san     TEXT NOT NULL,         -- space-separated SAN moves
+        starting_fen  TEXT,                  -- optional non-standard start
+        side          TEXT,                  -- preferred side: white | black | both | null
+        created_at    TIMESTAMPTZ DEFAULT NOW(),
+        updated_at    TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT custom_openings_owner_xor
+          CHECK ((user_id IS NOT NULL) <> (guest_id IS NOT NULL))
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_custom_openings_owner_path
+        ON custom_openings(COALESCE(user_id::text, ''), COALESCE(guest_id, ''), group_name, opening_name);
+      CREATE INDEX IF NOT EXISTS idx_custom_openings_guest
+        ON custom_openings(guest_id) WHERE guest_id IS NOT NULL;
+    `,
+  },
 ];
 
 export async function runMigrations() {
