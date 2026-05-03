@@ -1402,42 +1402,44 @@ async function main() {
       captureEngineThinkingEval();
       scheduleTimelineRender();
     });
-    // ── Crash routing (consultation Phase 1) ──────────────────────
+    // ── Crash routing (consultation Phase 1, user-policy override) ─
     // engine.js fires `engine-crashed` on a runtime worker.onerror
-    // (memory OOB, null function, etc.). Route to switchEngineFlavor
-    // with a one-way fallback rule: full → lite (smaller NNUE, less
-    // memory pressure), lite → lite-single. Never re-recover into
-    // the same flavor that just crashed.
+    // (memory OOB, null function, etc.). User policy: STAY on the
+    // chosen flavor. No automatic switch to lite. Recovery rebuilds
+    // the SAME flavor with a fresh worker — fixes transient WASM
+    // memory corruption without weakening the engine.
+    //
+    // Retry budget: 3 attempts per session. After the third crash
+    // we stop auto-recovering and surface a clear message — at that
+    // point the engine is genuinely broken on this device for this
+    // flavor, and the user should refresh / pick another flavor
+    // manually rather than have us silently degrade their choice.
     eng.addEventListener('engine-crashed', (ev) => {
       const crashedFlavor = ev.detail?.flavor;
-      const fallback = (crashedFlavor === 'full')
-        ? 'lite'
-        : (crashedFlavor === 'lite' || crashedFlavor === 'avrukh' || crashedFlavor === 'kaufman' || crashedFlavor === 'classical' || crashedFlavor === 'alphazero' || crashedFlavor === 'avrukhplus')
-          ? 'lite-single'
-          : 'lite-single';
-      console.warn('[engine] crashed → one-way fallback', { from: crashedFlavor, to: fallback });
-      if (ui.narrationText) {
-        ui.narrationText.innerHTML = `⚠ Engine crashed — falling back to <strong>${fallback}</strong>…`;
-      }
-      // Don't loop forever if the fallback also crashes.
-      if (window.__engineCrashFallbackTried) {
-        console.error('[engine] fallback already tried in this session — giving up');
+      window.__engineCrashCount = (window.__engineCrashCount || 0) + 1;
+      const attempt = window.__engineCrashCount;
+      const MAX_RETRIES = 3;
+      console.warn('[engine] crashed — retrying SAME flavor', {
+        flavor: crashedFlavor, attempt, maxRetries: MAX_RETRIES,
+      });
+      if (attempt > MAX_RETRIES) {
+        console.error('[engine] crash retry budget exhausted');
+        if (ui.narrationText) {
+          ui.narrationText.innerHTML =
+            `❌ Engine (${crashedFlavor}) crashed ${MAX_RETRIES} times this session. ` +
+            `Refresh the page to start fresh, or pick a different engine flavor from the toolbar dropdown.`;
+        }
         return;
       }
-      window.__engineCrashFallbackTried = true;
-      // Update the flavor pref + selector so the user sees what
-      // happened. localStorage carries this forward across refresh
-      // — they'll boot lite next time.
-      try {
-        currentFlavor = fallback;
-        if (ui.selectFlavor) ui.selectFlavor.value = fallback;
-        localStorage.setItem(FLAVOR_STORAGE, fallback);
-      } catch {}
-      switchEngineFlavor(fallback)
+      if (ui.narrationText) {
+        ui.narrationText.innerHTML =
+          `⚠ Engine crashed — restarting <strong>${crashedFlavor}</strong> ` +
+          `(attempt ${attempt}/${MAX_RETRIES})…`;
+      }
+      switchEngineFlavor(crashedFlavor)
         .then(() => {
           console.log('[engine] crash recovery done — replaying pending turn if any');
-          if (ui.narrationText) ui.narrationText.innerHTML = `✓ Engine recovered (${fallback}).`;
-          // Replay any queued engine turn that was lost in the crash.
+          if (ui.narrationText) ui.narrationText.innerHTML = `✓ Engine recovered (${crashedFlavor}).`;
           if (window.__pendingEngineTurnFen) {
             console.log('[engine] replaying pending engine turn after recovery');
             try { fireAnalysis(); } catch {}
